@@ -329,12 +329,13 @@
       reports
         .map((r) => {
           const mag = r.magnitude ? ` · ${escapeHtml(r.magnitude)}` : "";
-          const dist =
+          const milesVal =
             r.distanceMi != null
-              ? `${r.distanceMi} mi`
+              ? r.distanceMi
               : r.distanceKm != null
-                ? `${Math.round(r.distanceKm * 0.621371 * 10) / 10} mi`
-                : "";
+                ? Math.round(r.distanceKm * 0.621371 * 10) / 10
+                : null;
+          const dist = milesVal != null ? `${milesVal} miles` : "";
           return `<li>
             <div class="type">${escapeHtml(r.type)}${mag}</div>
             <div>${escapeHtml(r.location)}${r.state ? ", " + escapeHtml(r.state) : ""}</div>
