@@ -20,6 +20,7 @@ html, body {
 body { padding: 0 0 2rem; }
 
 .wrap {
+  width: 100%;
   max-width: 520px;
   margin: 0 auto;
   padding: 12px 18px 28px;
@@ -151,6 +152,43 @@ input:focus { outline: 2px solid var(--ink-soft); outline-offset: 1px; }
   width: 100%;
   background: #d4d4d4;
 }
+
+@media (min-width: 720px) {
+  .wrap {
+    max-width: 720px;
+    padding: 20px 28px 36px;
+  }
+  #map {
+    height: 380px;
+  }
+  .brand h1 {
+    font-size: 2rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .wrap {
+    max-width: 960px;
+    padding: 24px 32px 48px;
+  }
+  #map {
+    height: 480px;
+  }
+  .row {
+    gap: 16px;
+  }
+  .reports {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .reports li {
+    border-right: 1px solid rgba(59,42,30,0.08);
+  }
+  .reports li:nth-child(even) {
+    border-right: none;
+  }
+}
+
 .step-block {
   padding: 12px;
   background: var(--paper2);
@@ -206,13 +244,5 @@ input:focus { outline: 2px solid var(--ink-soft); outline-offset: 1px; }
 .reports .meta { color: var(--ink-soft); font-size: 0.8rem; margin-top: 2px; }
 .muted { padding: 14px; color: var(--ink-soft); font-size: 0.9rem; }
 
-.handoff {
-  padding: 14px;
-  border: 1.5px solid var(--rule);
-  border-radius: 12px;
-  background: var(--paper);
-  margin-bottom: 14px;
-}
-.handoff p { margin: 0 0 10px; font-size: 0.95rem; line-height: 1.4; }
 
 .hidden { display: none !important; }

@@ -273,6 +273,7 @@
         magnitude: mag && mag !== "UNK" ? mag : null,
         comments: rest.join(",").trim(),
         distanceKm: Math.round(d * 10) / 10,
+        distanceMi: Math.round(d * 0.621371 * 10) / 10,
       });
     }
     return reports.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
@@ -329,7 +330,11 @@
         .map((r) => {
           const mag = r.magnitude ? ` · ${escapeHtml(r.magnitude)}` : "";
           const dist =
-            r.distanceKm != null ? `${r.distanceKm} km` : "";
+            r.distanceMi != null
+              ? `${r.distanceMi} mi`
+              : r.distanceKm != null
+                ? `${Math.round(r.distanceKm * 0.621371 * 10) / 10} mi`
+                : "";
           return `<li>
             <div class="type">${escapeHtml(r.type)}${mag}</div>
             <div>${escapeHtml(r.location)}${r.state ? ", " + escapeHtml(r.state) : ""}</div>
@@ -466,4 +471,8 @@
   });
 
   buildStepButtons();
+
+  window.addEventListener("resize", () => {
+    if (map) map.invalidateSize();
+  });
 })();
