@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PastWeather</title>
+  <meta name="description" content="Look up archived radar and storm reports for a place and time." />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="screen-home" class="wrap">
+    <header class="brand">
+      <h1>PastWeather</h1>
+      <p class="sub">Look up what happened</p>
+    </header>
+    <p class="helper">Radar and storm reports for a given place and time.</p>
+
+    <div class="field">
+      <label for="location">Location</label>
+      <input id="location" type="text" placeholder="Address, place, or lat, lon" autocomplete="off" />
+    </div>
+    <div class="row">
+      <div class="field date">
+        <label for="date">Date (UTC)</label>
+        <input id="date" type="text" placeholder="YYYY-MM-DD" inputmode="numeric" autocomplete="off" />
+      </div>
+      <div class="field">
+        <label for="time">Time (UTC)</label>
+        <input id="time" type="text" placeholder="HH:mm" inputmode="numeric" autocomplete="off" />
+      </div>
+    </div>
+
+    <p id="home-error" class="error hidden"></p>
+    <button id="btn-show" class="btn" type="button">Show past weather</button>
+    <p class="footnote">PastWeather shows archived radar and storm reports. Times are UTC.</p>
+  </div>
+
+  <div id="screen-results" class="wrap hidden">
+    <nav class="nav">
+      <button type="button" class="back" id="btn-back" aria-label="Back">‹</button>
+      <h2>PastWeather</h2>
+      <span class="spacer"></span>
+    </nav>
+
+    <div class="chip">
+      <div id="chip-main"></div>
+      <div id="chip-sub" class="sub hidden"></div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-title">Radar</div>
+      <div id="map"></div>
+      <div class="step-block">
+        <div class="step-label">Step time (minutes)</div>
+        <div class="step-row" id="step-back"></div>
+        <div class="step-row" id="step-fwd"></div>
+        <button type="button" id="btn-reset" class="reset-link hidden">Reset to selected time</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">Storm reports</div>
+      <div id="reports"></div>
+    </section>
+
+    <div class="handoff">
+      <p>Need a certified, site-specific analysis? Standard Weather can help.</p>
+      <a class="btn secondary" href="https://standardweather.github.io/" target="_blank" rel="noopener">Learn more</a>
+    </div>
+
+    <p class="footnote">
+      PastWeather shows archived radar and storm reports from IEM and SPC.
+      Not a substitute for a certified weather analysis.
+    </p>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
