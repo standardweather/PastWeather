@@ -101,8 +101,16 @@
   }
 
   function toIsoUtc(date, time) {
-    const dm = date.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    const tm = time.trim().match(/^(\d{1,2}):(\d{2})$/);
+    const rawDate = date.trim();
+    const rawTime = time.trim();
+    // YYYY-MM-DD or YYYYMMDD
+    const dm =
+      rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/) ||
+      rawDate.match(/^(\d{4})(\d{2})(\d{2})$/);
+    // HH:mm, H:mm, or HHmm (0000–2359)
+    const tm =
+      rawTime.match(/^(\d{1,2}):(\d{2})$/) ||
+      rawTime.match(/^(\d{2})(\d{2})$/);
     if (!dm || !tm) return null;
     const y = Number(dm[1]);
     const mo = Number(dm[2]);
@@ -446,7 +454,7 @@
     el.homeError.classList.add("hidden");
     const iso = toIsoUtc(el.date.value, el.time.value);
     if (!iso) {
-      el.homeError.textContent = "Use date YYYY-MM-DD and time HH:mm (UTC).";
+      el.homeError.textContent = "Use date YYYY-MM-DD or YYYYMMDD, and time HH:mm or HHmm (UTC).";
       el.homeError.classList.remove("hidden");
       return;
     }

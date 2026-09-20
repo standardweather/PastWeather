@@ -6,7 +6,7 @@
   <title>PastWeather</title>
   <meta name="description" content="Look up archived radar and storm reports for a place and time." />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=20260920b" />
+  <link rel="stylesheet" href="styles.css?v=20260920c" />
 </head>
 <body>
   <div id="screen-home" class="wrap">
@@ -23,11 +23,11 @@
     <div class="row">
       <div class="field date">
         <label for="date">Date (UTC)</label>
-        <input id="date" type="text" placeholder="YYYY-MM-DD" inputmode="numeric" autocomplete="off" />
+        <input id="date" type="text" placeholder="YYYY-MM-DD or YYYYMMDD" inputmode="numeric" autocomplete="off" />
       </div>
       <div class="field">
         <label for="time">Time (UTC)</label>
-        <input id="time" type="text" placeholder="HH:mm" inputmode="numeric" autocomplete="off" />
+        <input id="time" type="text" placeholder="HH:mm or HHmm" inputmode="numeric" autocomplete="off" />
       </div>
     </div>
 
@@ -71,6 +71,6 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260920b"></script>
+  <script src="app.js?v=20260920c"></script>
 </body>
 </html>
