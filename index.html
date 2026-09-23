@@ -6,7 +6,7 @@
   <title>PastWeather</title>
   <meta name="description" content="Look up archived radar and storm reports for a place and time." />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=20260920c" />
+  <link rel="stylesheet" href="styles.css?v=20260923a" />
 </head>
 <body>
   <div id="screen-home" class="wrap">
@@ -51,6 +51,12 @@
     <section class="panel">
       <div class="panel-title">Radar</div>
       <div id="map"></div>
+      <div class="map-opts">
+        <label class="map-opt">
+          <input type="checkbox" id="show-reports-map" checked />
+          Show storm reports on map
+        </label>
+      </div>
       <div class="step-block">
         <div class="step-label">Step time (minutes)</div>
         <div class="step-row" id="step-back"></div>
@@ -71,6 +77,6 @@
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260920c"></script>
+  <script src="app.js?v=20260923a"></script>
 </body>
 </html>

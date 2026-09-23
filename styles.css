@@ -246,3 +246,20 @@ input:focus { outline: 2px solid var(--ink-soft); outline-offset: 1px; }
 
 
 .hidden { display: none !important; }
+
+.map-opts {
+  padding: 8px 12px;
+  background: var(--paper2);
+  border-top: 1px solid rgba(59,42,30,0.2);
+}
+.map-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-deep);
+  cursor: pointer;
+  user-select: none;
+}
+.map-opt input { accent-color: var(--ink-deep); width: 16px; height: 16px; }

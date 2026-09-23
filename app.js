@@ -23,6 +23,7 @@
     stepFwd: document.getElementById("step-fwd"),
     btnReset: document.getElementById("btn-reset"),
     map: document.getElementById("map"),
+    showReportsMap: document.getElementById("show-reports-map"),
   };
 
   /** @type {{ label: string, lat: number, lon: number, isoUtc: string } | null} */
@@ -34,6 +35,10 @@
   let radarLayer = null;
   /** @type {L.CircleMarker | null} */
   let poiMarker = null;
+  /** @type {L.LayerGroup | null} */
+  let reportLayer = null;
+  /** @type {any[]} */
+  let lastReports = [];
 
   function pad(n) {
     return String(n).padStart(2, "0");
@@ -323,13 +328,63 @@
     }).addTo(map);
   }
 
+
+  function reportFill(type) {
+    if (type === "tornado") return "#C0392B";
+    if (type === "hail") return "#2471A3";
+    if (type === "wind") return "#1E8449";
+    return "#7F8C8D";
+  }
+
+  function syncReportMarkers() {
+    if (!map) return;
+    if (!reportLayer) reportLayer = L.layerGroup().addTo(map);
+    reportLayer.clearLayers();
+    const show = el.showReportsMap && el.showReportsMap.checked;
+    if (!show || !lastReports.length) return;
+    for (const r of lastReports) {
+      if (!Number.isFinite(r.lat) || !Number.isFinite(r.lon)) continue;
+      const mag = r.magnitude ? " · " + r.magnitude : "";
+      const miles =
+        r.distanceMi != null
+          ? r.distanceMi
+          : r.distanceKm != null
+            ? Math.round(r.distanceKm * 0.621371 * 10) / 10
+            : null;
+      const dist = miles != null ? miles + " miles" : "";
+      const html =
+        "<strong>" +
+        escapeHtml(r.type) +
+        escapeHtml(mag) +
+        "</strong><br>" +
+        escapeHtml(r.location) +
+        (r.state ? ", " + escapeHtml(r.state) : "") +
+        "<br><span style=\"opacity:0.8\">" +
+        escapeHtml(formatDisplayUtc(r.timeUtc)) +
+        (dist ? " · " + escapeHtml(dist) : "") +
+        "</span>";
+      L.circleMarker([r.lat, r.lon], {
+        radius: 6,
+        color: "#2A1C14",
+        weight: 1.5,
+        fillColor: reportFill(r.type),
+        fillOpacity: 0.92,
+      })
+        .bindPopup(html)
+        .addTo(reportLayer);
+    }
+  }
+
   function renderReports(reports, error) {
+    lastReports = Array.isArray(reports) ? reports.slice() : [];
     if (error) {
       el.reports.innerHTML = `<p class="muted">${escapeHtml(error)}</p>`;
+      syncReportMarkers();
       return;
     }
     if (!reports.length) {
       el.reports.innerHTML = `<p class="muted">No storm reports found nearby.</p>`;
+      syncReportMarkers();
       return;
     }
     el.reports.innerHTML =
@@ -352,6 +407,7 @@
         })
         .join("") +
       `</ul>`;
+    syncReportMarkers();
   }
 
   function escapeHtml(s) {
@@ -448,6 +504,16 @@
   async function stepBy(minutes) {
     radarIso = shiftIso(radarIso, minutes);
     await loadForTime(radarIso);
+  }
+
+  if (el.showReportsMap) {
+    const saved = localStorage.getItem("pwShowReportsMap");
+    if (saved === "0") el.showReportsMap.checked = false;
+    if (saved === "1") el.showReportsMap.checked = true;
+    el.showReportsMap.addEventListener("change", function () {
+      localStorage.setItem("pwShowReportsMap", el.showReportsMap.checked ? "1" : "0");
+      syncReportMarkers();
+    });
   }
 
   el.btnShow.addEventListener("click", async () => {
