@@ -296,7 +296,7 @@
     if (!map) {
       map = L.map(el.map, { zoomControl: true, attributionControl: true }).setView([lat, lon], 8);
       L.tileLayer(
-        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
         { maxZoom: 16, attribution: "Esri" }
       ).addTo(map);
     } else {
@@ -304,10 +304,10 @@
     }
     if (poiMarker) poiMarker.remove();
     poiMarker = L.circleMarker([lat, lon], {
-      radius: 7,
-      color: "#2A1C14",
-      weight: 2,
-      fillColor: "#F2F0E6",
+      radius: 8,
+      color: "#FFFFFF",
+      weight: 2.5,
+      fillColor: "#4AD1FF",
       fillOpacity: 1,
     }).addTo(map);
     setTimeout(() => map && map.invalidateSize(), 100);
@@ -330,10 +330,10 @@
 
 
   function reportFill(type) {
-    if (type === "tornado") return "#C0392B";
-    if (type === "hail") return "#2471A3";
-    if (type === "wind") return "#1E8449";
-    return "#7F8C8D";
+    if (type === "tornado") return "#FF453A";
+    if (type === "hail") return "#30D158";
+    if (type === "wind") return "#0A84FF";
+    return "#8E8E93";
   }
 
   function syncReportMarkers() {
@@ -365,7 +365,7 @@
         "</span>";
       L.circleMarker([r.lat, r.lon], {
         radius: 6,
-        color: "#2A1C14",
+        color: "#FFFFFF",
         weight: 1.5,
         fillColor: reportFill(r.type),
         fillOpacity: 0.92,
@@ -399,7 +399,7 @@
                 ? Math.round(r.distanceKm * 0.621371 * 10) / 10
                 : null;
           const dist = milesVal != null ? `${milesVal} miles` : "";
-          return `<li>
+          return `<li class="${escapeHtml(r.type)}">
             <div class="type">${escapeHtml(r.type)}${mag}</div>
             <div>${escapeHtml(r.location)}${r.state ? ", " + escapeHtml(r.state) : ""}</div>
             <div class="meta">${escapeHtml(formatDisplayUtc(r.timeUtc))} · ${escapeHtml(dist)}</div>

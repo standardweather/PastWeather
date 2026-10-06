@@ -2,81 +2,116 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>PastWeather</title>
   <meta name="description" content="Look up archived radar and storm reports for a place and time." />
+  <meta name="theme-color" content="#070914" />
+  <meta name="color-scheme" content="dark" />
+  <meta property="og:title" content="PastWeather" />
+  <meta property="og:description" content="Look up archived radar and storm reports for a place and time." />
+  <meta property="og:image" content="https://standardweather.github.io/PastWeather/assets/icon-512.png" />
+  <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&display=swap" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=20260923a" />
+  <link rel="stylesheet" href="styles.css?v=20261006a" />
 </head>
 <body>
-  <div id="screen-home" class="wrap">
-    <header class="brand">
-      <h1>PastWeather</h1>
-      <p class="sub">Look up what happened</p>
-    </header>
-    <p class="helper">Radar and storm reports for a given place and time.</p>
+  <header class="brandbar">
+    <a class="brandbar-inner" href="./" aria-label="PastWeather home">
+      <img src="assets/logo@2x.png" srcset="assets/logo@2x.png 2x, assets/logo@3x.png 3x" width="30" height="30" alt="" />
+      <span class="wordmark"><span class="past">Past</span><span class="weather">Weather</span></span>
+    </a>
+  </header>
 
-    <div class="field">
-      <label for="location">Location</label>
-      <input id="location" type="text" placeholder="Address, place, or lat, lon" autocomplete="off" />
-    </div>
-    <div class="row">
-      <div class="field date">
-        <label for="date">Date (UTC)</label>
-        <input id="date" type="text" placeholder="YYYY-MM-DD or YYYYMMDD" inputmode="numeric" autocomplete="off" />
-      </div>
+  <main id="screen-home" class="wrap">
+    <section class="hero">
+      <img class="hero-icon" src="assets/icon-192.png" width="96" height="96" alt="PastWeather app icon" />
+      <h1 class="wordmark"><span class="past">Past</span><span class="weather">Weather</span></h1>
+      <p class="tagline">Look up what happened</p>
+      <p class="helper">Archived radar and storm reports for any place and time in the US.</p>
+    </section>
+
+    <section class="glass form">
       <div class="field">
-        <label for="time">Time (UTC)</label>
-        <input id="time" type="text" placeholder="HH:mm or HHmm" inputmode="numeric" autocomplete="off" />
+        <label for="location">Location</label>
+        <div class="input-icon">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></svg>
+          <input id="location" type="text" placeholder="Address, place, or lat, lon" autocomplete="off" />
+        </div>
       </div>
-    </div>
+      <div class="row">
+        <div class="field date">
+          <label for="date">Date (UTC)</label>
+          <input id="date" type="text" placeholder="YYYY-MM-DD" inputmode="numeric" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="time">Time (UTC)</label>
+          <input id="time" type="text" placeholder="HH:mm" inputmode="numeric" autocomplete="off" />
+        </div>
+      </div>
 
-    <p id="home-error" class="error hidden"></p>
-    <button id="btn-show" class="btn" type="button">Show past weather</button>
-    <p class="footnote">PastWeather shows archived radar and storm reports. Times are UTC.</p>
-  </div>
+      <p id="home-error" class="error hidden"></p>
+      <button id="btn-show" class="btn" type="button">Show past weather</button>
+    </section>
 
-  <div id="screen-results" class="wrap hidden">
+    <p class="footnote">
+      Radar from the Iowa Environmental Mesonet archive. Storm reports from NOAA SPC. Times are UTC.
+    </p>
+  </main>
+
+  <main id="screen-results" class="wrap hidden">
     <nav class="nav">
-      <button type="button" class="back" id="btn-back" aria-label="Back">‹</button>
-      <h2>PastWeather</h2>
-      <span class="spacer"></span>
+      <button type="button" class="back" id="btn-back" aria-label="Back">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
+      </button>
+      <div class="event">
+        <div id="chip-main"></div>
+        <div id="chip-sub" class="sub hidden"></div>
+      </div>
     </nav>
 
-    <div class="chip">
-      <div id="chip-main"></div>
-      <div id="chip-sub" class="sub hidden"></div>
-    </div>
-
-    <section class="panel">
+    <section class="glass panel">
       <div class="panel-title">Radar</div>
       <div id="map"></div>
       <div class="map-opts">
         <label class="map-opt">
-          <input type="checkbox" id="show-reports-map" checked />
+          <input type="checkbox" id="show-reports-map" role="switch" checked />
           Show storm reports on map
         </label>
+        <div class="legend" aria-label="Reflectivity scale, 15 to 70 dBZ">
+          <span class="legend-unit">dBZ</span>
+          <div class="legend-scale">
+            <div class="legend-bar"></div>
+            <div class="legend-ticks"><b style="left:0">15</b><b style="left:27.3%">30</b><b style="left:54.5%">45</b><b style="left:81.8%">60</b><b style="left:100%">70</b></div>
+          </div>
+        </div>
       </div>
       <div class="step-block">
         <div class="step-label">Step time (minutes)</div>
-        <div class="step-row" id="step-back"></div>
-        <div class="step-row" id="step-fwd"></div>
+        <div class="step-rows">
+          <div class="step-row" id="step-back"></div>
+          <div class="step-row" id="step-fwd"></div>
+        </div>
         <button type="button" id="btn-reset" class="reset-link hidden">Reset to selected time</button>
       </div>
     </section>
 
-    <section class="panel">
+    <section class="glass panel">
       <div class="panel-title">Storm reports</div>
       <div id="reports"></div>
     </section>
 
     <p class="footnote">
-      PastWeather shows archived radar and storm reports from IEM and SPC.
+      Archived radar from the Iowa Environmental Mesonet and storm reports from NOAA SPC.
       Not a substitute for a certified weather analysis.
     </p>
-  </div>
+  </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20260923a"></script>
+  <script src="app.js?v=20261006a"></script>
 </body>
 </html>
