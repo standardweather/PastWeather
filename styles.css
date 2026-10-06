@@ -80,18 +80,7 @@ button, input { font: inherit; }
   box-shadow: 0 0 0 0.5px var(--hairline), 0 14px 40px rgba(0, 0, 0, 0.5), 0 0 60px rgba(74, 209, 255, 0.18);
 }
 .hero h1.wordmark { margin: 0; font-size: clamp(2.2rem, 7vw, 2.8rem); }
-.tagline {
-  margin: 10px 0 0;
-  font-size: 0.72rem;
-  font-weight: 600;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  background: var(--gradient);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.helper { margin: 12px auto 0; max-width: 34ch; font-size: 0.95rem; line-height: 1.45; color: var(--text2); }
+.helper { margin: 10px auto 0; max-width: 34ch; font-size: 0.95rem; line-height: 1.45; color: var(--text2); }
 
 /* ---------- Glass ---------- */
 .glass {
