@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&display=swap" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=20261006b" />
+  <link rel="stylesheet" href="styles.css?v=20261015a" />
 </head>
 <body>
   <header class="brandbar">
@@ -52,13 +52,15 @@
           <input id="time" type="text" placeholder="HH:mm" inputmode="numeric" autocomplete="off" />
         </div>
       </div>
+      <p class="field-note">Radar is available from October 14, 2020 onward.</p>
 
       <p id="home-error" class="error hidden"></p>
       <button id="btn-show" class="btn" type="button">Show past weather</button>
     </section>
 
     <p class="footnote">
-      Radar from the Iowa Environmental Mesonet archive. Storm reports from NOAA SPC. Times are UTC.
+      Radar from NOAA MRMS (October 14, 2020 to present). Storm reports from NOAA SPC and NCEI Storm Events.
+      Place search from the US Census Bureau and USGS. Times are UTC.
     </p>
   </main>
 
@@ -105,12 +107,14 @@
     </section>
 
     <p class="footnote">
-      Archived radar from the Iowa Environmental Mesonet and storm reports from NOAA SPC.
+      Radar from NOAA MRMS seamless hybrid-scan reflectivity (October 14, 2020 to present). Storm reports from
+      NOAA SPC (preliminary) and NCEI Storm Events (official).
       Not a substitute for a certified weather analysis.
     </p>
   </main>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="app.js?v=20261006a"></script>
+  <script src="mrms.js?v=20261015a"></script>
+  <script src="app.js?v=20261015a"></script>
 </body>
 </html>

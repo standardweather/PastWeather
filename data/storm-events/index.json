@@ -1,0 +1,23 @@
+{
+  "files": {
+    "2020": "StormEvents_details-ftp_v1.0_d2020_c20260323.csv.gz",
+    "2021": "StormEvents_details-ftp_v1.0_d2021_c20260323.csv.gz",
+    "2022": "StormEvents_details-ftp_v1.0_d2022_c20260625.csv.gz",
+    "2023": "StormEvents_details-ftp_v1.0_d2023_c20260323.csv.gz",
+    "2024": "StormEvents_details-ftp_v1.0_d2024_c20260728.csv.gz",
+    "2025": "StormEvents_details-ftp_v1.0_d2025_c20260819.csv.gz",
+    "2026": "StormEvents_details-ftp_v1.0_d2026_c20260918.csv.gz"
+  },
+  "lastMonth": {
+    "2020": "202012",
+    "2021": "202112",
+    "2022": "202212",
+    "2023": "202312",
+    "2024": "202412",
+    "2025": "202512",
+    "2026": "202606"
+  },
+  "source": "NOAA NCEI Storm Events Database, https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles/",
+  "firstDay": "2020-10-14",
+  "lastDay": "2026-06-30"
+}

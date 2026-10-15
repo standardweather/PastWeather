@@ -2,8 +2,9 @@
 (function () {
   "use strict";
 
-  const IEM_BASE = "https://mesonet.agron.iastate.edu";
   const SPC_BASE = "https://www.spc.noaa.gov/climo/reports";
+  // Per-day NCEI Storm Events files, split from NCEI's yearly CSVs by tools/storm_events.py.
+  const STORM_EVENTS_BASE = "data/storm-events";
   const STEP_MINUTES = [5, 15, 30, 60];
   const RADIUS_KM = 250;
 
@@ -31,8 +32,9 @@
   let radarIso = null;
   /** @type {L.Map | null} */
   let map = null;
-  /** @type {L.TileLayer | null} */
+  /** @type {L.ImageOverlay | null} */
   let radarLayer = null;
+  let loadToken = 0;
   /** @type {L.CircleMarker | null} */
   let poiMarker = null;
   /** @type {L.LayerGroup | null} */
@@ -53,19 +55,6 @@
       Math.sin(dLat / 2) ** 2 +
       Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
     return 2 * R * Math.asin(Math.sqrt(a));
-  }
-
-  function scanTsToLayerId(ts) {
-    const m = String(ts).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
-    if (!m) {
-      const d = new Date(ts);
-      if (Number.isNaN(d.getTime())) return String(ts).replace(/\D/g, "").slice(0, 12);
-      return (
-        `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}` +
-        `${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}`
-      );
-    }
-    return `${m[1]}${m[2]}${m[3]}${m[4]}${m[5]}`;
   }
 
   function spcStormDayKey(isoUtc) {
@@ -131,12 +120,110 @@
     return new Date(t).toISOString().replace(/\.\d{3}Z$/, "Z");
   }
 
-  function windowAround(isoUtc, minutes) {
-    const t = new Date(isoUtc).getTime();
-    return {
-      start: new Date(t - minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
-      end: new Date(t + minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
-    };
+  // [postal code, FIPS code, name] for TIGERweb (which keys states by FIPS) and for parsing "City, State".
+  const STATES = [
+    ["AL", "01", "Alabama"], ["AK", "02", "Alaska"], ["AZ", "04", "Arizona"], ["AR", "05", "Arkansas"],
+    ["CA", "06", "California"], ["CO", "08", "Colorado"], ["CT", "09", "Connecticut"], ["DE", "10", "Delaware"],
+    ["DC", "11", "District of Columbia"], ["FL", "12", "Florida"], ["GA", "13", "Georgia"], ["HI", "15", "Hawaii"],
+    ["ID", "16", "Idaho"], ["IL", "17", "Illinois"], ["IN", "18", "Indiana"], ["IA", "19", "Iowa"],
+    ["KS", "20", "Kansas"], ["KY", "21", "Kentucky"], ["LA", "22", "Louisiana"], ["ME", "23", "Maine"],
+    ["MD", "24", "Maryland"], ["MA", "25", "Massachusetts"], ["MI", "26", "Michigan"], ["MN", "27", "Minnesota"],
+    ["MS", "28", "Mississippi"], ["MO", "29", "Missouri"], ["MT", "30", "Montana"], ["NE", "31", "Nebraska"],
+    ["NV", "32", "Nevada"], ["NH", "33", "New Hampshire"], ["NJ", "34", "New Jersey"], ["NM", "35", "New Mexico"],
+    ["NY", "36", "New York"], ["NC", "37", "North Carolina"], ["ND", "38", "North Dakota"], ["OH", "39", "Ohio"],
+    ["OK", "40", "Oklahoma"], ["OR", "41", "Oregon"], ["PA", "42", "Pennsylvania"], ["RI", "44", "Rhode Island"],
+    ["SC", "45", "South Carolina"], ["SD", "46", "South Dakota"], ["TN", "47", "Tennessee"], ["TX", "48", "Texas"],
+    ["UT", "49", "Utah"], ["VT", "50", "Vermont"], ["VA", "51", "Virginia"], ["WA", "53", "Washington"],
+    ["WV", "54", "West Virginia"], ["WI", "55", "Wisconsin"], ["WY", "56", "Wyoming"], ["PR", "72", "Puerto Rico"],
+  ];
+
+  function findState(s) {
+    const t = s.trim().replace(/\./g, "").toLowerCase();
+    return STATES.find(([code, , name]) => code.toLowerCase() === t || name.toLowerCase() === t) || null;
+  }
+
+  /** "Moore, OK", "Moore, Oklahoma" or "Moore OK" → { name, state }; state is null when none is given. */
+  function splitPlace(text) {
+    const comma = text.lastIndexOf(",");
+    if (comma > 0) {
+      const state = findState(text.slice(comma + 1));
+      if (state) return { name: text.slice(0, comma).trim(), state };
+    }
+    for (const words of [2, 1]) {
+      const parts = text.trim().split(/\s+/);
+      if (parts.length <= words) continue;
+      const state = findState(parts.slice(-words).join(" "));
+      if (state) return { name: parts.slice(0, -words).join(" "), state };
+    }
+    return { name: text.trim(), state: null };
+  }
+
+  function sqlString(s) {
+    return "'" + s.toUpperCase().replace(/'/g, "''") + "'";
+  }
+
+  async function arcgisQuery(url, params) {
+    const u = new URL(url);
+    for (const [k, v] of Object.entries({ f: "json", ...params })) u.searchParams.set(k, v);
+    const res = await fetch(u.toString());
+    if (!res.ok) throw new Error(`Place search failed (${res.status})`);
+    const json = await res.json();
+    if (json.error) throw new Error(json.error.message || "Place search failed");
+    return json.features || [];
+  }
+
+  /** Census TIGERweb incorporated places (layer 4) and census-designated places (layer 5). */
+  async function searchTigerPlaces(name, state) {
+    const base = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Places_CouSub_ConCity_SubMCD/MapServer";
+    const where = `UPPER(BASENAME)=${sqlString(name)}` + (state ? ` AND STATE='${state[1]}'` : "");
+    const params = { where, outFields: "BASENAME,STATE,INTPTLAT,INTPTLON,AREALAND", returnGeometry: "false" };
+    const results = await Promise.all([4, 5].map((layer) => arcgisQuery(`${base}/${layer}/query`, params).catch(() => [])));
+    const hits = results.flat().map((f) => f.attributes);
+    if (!hits.length) return null;
+    // Without a state, the largest place by land area is the likeliest match.
+    hits.sort((a, b) => (b.AREALAND || 0) - (a.AREALAND || 0));
+    const h = hits[0];
+    const st = STATES.find(([, fips]) => fips === h.STATE);
+    return { label: `${h.BASENAME}${st ? ", " + st[0] : ""}`, lat: Number(h.INTPTLAT), lon: Number(h.INTPTLON) };
+  }
+
+  /** USGS GNIS populated places, for unincorporated communities TIGERweb doesn't list. */
+  async function searchGnis(name, state) {
+    const where = `UPPER(gaz_name)=${sqlString(name)}` + (state ? ` AND state_alpha='${state[0]}'` : "");
+    const features = await arcgisQuery("https://carto.nationalmap.gov/arcgis/rest/services/geonames/MapServer/3/query", {
+      where, outFields: "gaz_name,state_alpha", returnGeometry: "true", outSR: "4326",
+    });
+    const f = features.find((x) => x.geometry && x.geometry.points && x.geometry.points.length);
+    if (!f) return null;
+    const [lon, lat] = f.geometry.points[0];
+    return { label: `${f.attributes.gaz_name}, ${f.attributes.state_alpha}`, lat, lon };
+  }
+
+  /** The Census Geocoder sends no CORS headers, so it is called with JSONP. Street addresses only. */
+  function searchCensusAddress(text) {
+    return new Promise((resolve, reject) => {
+      const cb = "pwCensus" + Math.random().toString(36).slice(2);
+      const u = new URL("https://geocoding.geo.census.gov/geocoder/locations/onelineaddress");
+      u.searchParams.set("address", text);
+      u.searchParams.set("benchmark", "Public_AR_Current");
+      u.searchParams.set("format", "jsonp");
+      u.searchParams.set("callback", cb);
+      const script = document.createElement("script");
+      const timer = setTimeout(() => done(new Error("Address search timed out")), 12000);
+      function done(err, value) {
+        clearTimeout(timer);
+        delete window[cb];
+        script.remove();
+        err ? reject(err) : resolve(value);
+      }
+      window[cb] = (data) => {
+        const m = data?.result?.addressMatches?.[0];
+        done(null, m ? { label: m.matchedAddress, lat: m.coordinates.y, lon: m.coordinates.x } : null);
+      };
+      script.onerror = () => done(new Error("Address search failed"));
+      script.src = u.toString();
+      document.head.appendChild(script);
+    });
   }
 
   async function geocodePlace(q) {
@@ -150,62 +237,19 @@
         lon: direct.lon,
       };
     }
-    const url = new URL("https://nominatim.openstreetmap.org/search");
-    url.searchParams.set("q", text);
-    url.searchParams.set("format", "json");
-    url.searchParams.set("limit", "1");
-    const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
-    if (!res.ok) throw new Error(`Geocode failed (${res.status}). Try lat, lon instead.`);
-    const data = await res.json();
-    if (!data?.length) throw new Error("Place not found. Try a clearer name or lat, lon.");
-    const hit = data[0];
-    const lat = Number(hit.lat);
-    const lon = Number(hit.lon);
-    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
-      throw new Error("Invalid geocode result. Try lat, lon.");
+    let hit = null;
+    if (/^\d/.test(text)) {
+      hit = await searchCensusAddress(text).catch(() => null);
+    } else {
+      const { name, state } = splitPlace(text);
+      hit = (await searchTigerPlaces(name, state).catch(() => null)) ||
+        (await searchGnis(name, state).catch(() => null)) ||
+        (await searchCensusAddress(text).catch(() => null));
     }
-    const short = hit.display_name?.split(",").slice(0, 3).join(",").trim() || text;
-    return { label: short, lat, lon };
-  }
-
-  async function listScans(radar, product, start, end) {
-    const u = new URL(`${IEM_BASE}/json/radar.py`);
-    u.searchParams.set("operation", "list");
-    u.searchParams.set("radar", radar);
-    u.searchParams.set("product", product);
-    u.searchParams.set("start", start);
-    u.searchParams.set("end", end);
-    const res = await fetch(u.toString());
-    if (!res.ok) return [];
-    const json = await res.json();
-    const raw = json.scans ?? json.data ?? [];
-    return raw.map((s) => ({ ts: s.ts, layerId: scanTsToLayerId(s.ts), product }));
-  }
-
-  function nearestScan(scans, targetIso) {
-    if (!scans.length) return null;
-    const target = new Date(targetIso).getTime();
-    let best = scans[0];
-    let bestDiff = Math.abs(new Date(best.ts).getTime() - target);
-    for (const s of scans.slice(1)) {
-      const diff = Math.abs(new Date(s.ts).getTime() - target);
-      if (diff < bestDiff) {
-        best = s;
-        bestDiff = diff;
-      }
+    if (!hit || !Number.isFinite(hit.lat) || !Number.isFinite(hit.lon)) {
+      throw new Error("Place not found. Try “City, ST”, a street address, or lat, lon.");
     }
-    return best;
-  }
-
-  async function fetchNearestUscompScan(isoUtc) {
-    const { start, end } = windowAround(isoUtc, 90);
-    let scans = await listScans("USCOMP", "N0Q", start, end);
-    if (!scans.length) scans = await listScans("USCOMP", "N0B", start, end);
-    return nearestScan(scans, isoUtc);
-  }
-
-  function iemRadarTileTemplate(radar, product, layerTime) {
-    return `${IEM_BASE}/c/tile.py/1.0.0/ridge::${radar}-${product}-${layerTime}/{z}/{x}/{y}.png`;
+    return hit;
   }
 
   function parseCsvLine(line) {
@@ -277,19 +321,109 @@
       reports.push({
         id: `spc-${section}-${dayKey}-${idx++}`,
         type: section,
+        label: section === "wind" ? "Thunderstorm wind" : section === "hail" ? "Hail" : "Tornado",
+        source: "SPC preliminary",
         timeUtc: /^\d{4}$/.test(time || "") ? hhmmToIso(dayKey, time) : time || "",
         lat: plat,
         lon: plon,
         location: location || "",
         county: county || "",
         state: state || "",
-        magnitude: mag && mag !== "UNK" ? mag : null,
+        magnitude: spcMagnitude(section, mag),
         comments: rest.join(",").trim(),
         distanceKm: Math.round(d * 10) / 10,
         distanceMi: Math.round(d * 0.621371 * 10) / 10,
       });
     }
     return reports.sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
+  }
+
+  function spcMagnitude(section, mag) {
+    if (!mag || mag === "UNK") return null;
+    if (section === "tornado") return /^\d$/.test(mag) ? `EF${mag}` : mag;
+    if (section === "hail") return Number.isFinite(Number(mag)) ? `${Number(mag) / 100}"` : mag;
+    return Number.isFinite(Number(mag)) ? `${mag} mph` : mag;
+  }
+
+  function nceiCategory(type) {
+    const t = type.toUpperCase();
+    if (t.includes("TORNADO") || t.includes("FUNNEL") || t.includes("WATERSPOUT")) return "tornado";
+    if (t.includes("HAIL")) return "hail";
+    if (t.includes("WIND")) return "wind";
+    if (t.includes("FLOOD") || t.includes("RAIN")) return "flood";
+    return "other";
+  }
+
+  function nceiMagnitude(e, type) {
+    if (type === "tornado") return e.torScale && e.torScale !== "EFU" ? e.torScale : null;
+    if (e.magnitude == null) return null;
+    if (type === "hail") return `${e.magnitude}"`;
+    if (type === "wind") return `${Math.round(e.magnitude)} kt${e.magnitudeType?.startsWith("M") ? " measured" : ""}`;
+    return null;
+  }
+
+  function nceiDetails(e) {
+    const facts = [];
+    if (e.torLengthMi) facts.push(`path ${e.torLengthMi} mi`);
+    if (e.torWidthYd) facts.push(`${e.torWidthYd} yd wide`);
+    if (e.deaths) facts.push(`${e.deaths} death${e.deaths === 1 ? "" : "s"}`);
+    if (e.injuries) facts.push(`${e.injuries} injur${e.injuries === 1 ? "y" : "ies"}`);
+    if (e.damageProperty && e.damageProperty !== "0.00K") facts.push(`property damage $${e.damageProperty}`);
+    return [facts.join(" · "), e.narrative || ""].filter(Boolean).join(" — ");
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+    return res.json();
+  }
+
+  /** Official NCEI Storm Events overlapping the same SPC convective day (12 UTC to 12 UTC). */
+  async function fetchNceiReportsNear(isoUtc, lat, lon, radiusKm) {
+    const dayKey = spcStormDayKey(isoUtc);
+    const y = 2000 + Number(dayKey.slice(0, 2));
+    const start = Date.UTC(y, Number(dayKey.slice(2, 4)) - 1, Number(dayKey.slice(4, 6)), 12);
+    const end = start + 86_400_000;
+    const index = await getJson(`${STORM_EVENTS_BASE}/index.json`).catch(() => null);
+    // Files are keyed by each event's UTC start day; look a day back for events already under way.
+    const days = [-1, 0, 1].map((k) => new Date(start + k * 86_400_000));
+    const files = await Promise.all(
+      days.map((d) => {
+        const key = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}`;
+        return getJson(`${STORM_EVENTS_BASE}/${key.slice(0, 4)}/${key}.json`).catch(() => null);
+      })
+    );
+    const reports = [];
+    for (const file of files) {
+      for (const e of file?.events || []) {
+        const begin = Date.parse(e.begin.replace("Z", ":00Z"));
+        const finish = e.end ? Date.parse(e.end.replace("Z", ":00Z")) : begin;
+        if (finish < start || begin >= end) continue;
+        let d = distanceKm(lat, lon, e.lat, e.lon);
+        if (e.endLat != null && e.endLon != null) d = Math.min(d, distanceKm(lat, lon, e.endLat, e.endLon));
+        if (d > radiusKm) continue;
+        const type = nceiCategory(e.type);
+        reports.push({
+          id: `ncei-${e.id}`,
+          type,
+          label: e.type,
+          source: "NCEI official" + (e.source ? ` · ${e.source}` : ""),
+          timeUtc: new Date(begin).toISOString(),
+          lat: e.lat,
+          lon: e.lon,
+          location: e.location || e.county || "",
+          county: e.county || "",
+          state: e.state || "",
+          magnitude: nceiMagnitude(e, type),
+          comments: nceiDetails(e),
+          distanceKm: Math.round(d * 10) / 10,
+          distanceMi: Math.round(d * 0.621371 * 10) / 10,
+        });
+      }
+    }
+    const lastDay = index?.lastDay ? Date.parse(index.lastDay + "T00:00:00Z") + 86_400_000 : null;
+    return { reports, pending: lastDay == null || end > lastDay, lastDay: index?.lastDay || null };
   }
 
   function ensureMap(lat, lon) {
@@ -313,26 +447,23 @@
     setTimeout(() => map && map.invalidateSize(), 100);
   }
 
-  function setRadarOverlay(scan) {
+  function setRadarOverlay(frame) {
     if (radarLayer) {
       radarLayer.remove();
       radarLayer = null;
     }
-    if (!map || !scan) return;
-    const product = scan.product || "N0Q";
-    const url = iemRadarTileTemplate("USCOMP", product, scan.layerId);
-    radarLayer = L.tileLayer(url, {
-      maxZoom: 10,
+    if (!map || !frame) return;
+    radarLayer = L.imageOverlay(frame.url, frame.bounds, {
       opacity: 0.8,
-      attribution: `IEM USCOMP-${product}`,
+      attribution: "NOAA MRMS",
     }).addTo(map);
   }
-
 
   function reportFill(type) {
     if (type === "tornado") return "#FF453A";
     if (type === "hail") return "#30D158";
     if (type === "wind") return "#0A84FF";
+    if (type === "flood") return "#40C8E0";
     return "#8E8E93";
   }
 
@@ -354,7 +485,7 @@
       const dist = miles != null ? miles + " miles" : "";
       const html =
         "<strong>" +
-        escapeHtml(r.type) +
+        escapeHtml(r.label || r.type) +
         escapeHtml(mag) +
         "</strong><br>" +
         escapeHtml(r.location) +
@@ -362,6 +493,8 @@
         "<br><span style=\"opacity:0.8\">" +
         escapeHtml(formatDisplayUtc(r.timeUtc)) +
         (dist ? " · " + escapeHtml(dist) : "") +
+        "<br>" +
+        escapeHtml(r.source || "") +
         "</span>";
       L.circleMarker([r.lat, r.lon], {
         radius: 6,
@@ -375,15 +508,16 @@
     }
   }
 
-  function renderReports(reports, error) {
+  function renderReports(reports, error, note) {
     lastReports = Array.isArray(reports) ? reports.slice() : [];
     if (error) {
       el.reports.innerHTML = `<p class="muted">${escapeHtml(error)}</p>`;
       syncReportMarkers();
       return;
     }
+    const noteHtml = note ? `<p class="muted">${escapeHtml(note)}</p>` : "";
     if (!reports.length) {
-      el.reports.innerHTML = `<p class="muted">No storm reports found nearby.</p>`;
+      el.reports.innerHTML = `<p class="muted">No storm reports found nearby.</p>` + noteHtml;
       syncReportMarkers();
       return;
     }
@@ -400,13 +534,16 @@
                 : null;
           const dist = milesVal != null ? `${milesVal} miles` : "";
           return `<li class="${escapeHtml(r.type)}">
-            <div class="type">${escapeHtml(r.type)}${mag}</div>
+            <div class="type">${escapeHtml(r.label || r.type)}${mag}</div>
             <div>${escapeHtml(r.location)}${r.state ? ", " + escapeHtml(r.state) : ""}</div>
             <div class="meta">${escapeHtml(formatDisplayUtc(r.timeUtc))} · ${escapeHtml(dist)}</div>
+            <div class="meta source">${escapeHtml(r.source || "")}</div>
+            ${r.comments ? `<div class="comments">${escapeHtml(r.comments)}</div>` : ""}
           </li>`;
         })
         .join("") +
-      `</ul>`;
+      `</ul>` +
+      noteHtml;
     syncReportMarkers();
   }
 
@@ -436,37 +573,57 @@
   }
 
   async function loadForTime(isoUtc) {
+    const token = ++loadToken;
     el.chipSub.classList.remove("hidden");
     el.chipSub.textContent = "Updating radar…";
     el.reports.innerHTML = `<p class="muted">Loading radar and reports…</p>`;
-
-    let scan = null;
-    let reports = [];
-    let reportsError = null;
-    try {
-      const [s, r] = await Promise.all([
-        fetchNearestUscompScan(isoUtc).catch(() => null),
-        fetchSpcReportsNear(isoUtc, query.lat, query.lon, RADIUS_KM).catch((e) => {
-          reportsError = e instanceof Error ? e.message : "Could not load storm reports";
-          return [];
-        }),
-      ]);
-      scan = s;
-      reports = r;
-    } finally {
-      el.chipSub.classList.add("hidden");
-    }
-
     ensureMap(query.lat, query.lon);
-    setRadarOverlay(scan);
-    updateChip(scan?.ts || null);
-    updateResetVisibility();
-    renderReports(reports, reportsError);
 
-    if (!scan) {
-      el.chipSub.classList.remove("hidden");
-      el.chipSub.textContent = "No radar available for this time and area.";
+    let radarError = null;
+    let reportsError = null;
+    const [frame, spc, ncei] = await Promise.all([
+      MRMS.isBeforeArchive(isoUtc)
+        ? null
+        : MRMS.fetchFrame(isoUtc, query.lat, query.lon).catch((e) => {
+            radarError = e instanceof Error ? e.message : "Could not load radar";
+            return null;
+          }),
+      fetchSpcReportsNear(isoUtc, query.lat, query.lon, RADIUS_KM).catch((e) => {
+        reportsError = e instanceof Error ? e.message : "Could not load storm reports";
+        return [];
+      }),
+      fetchNceiReportsNear(isoUtc, query.lat, query.lon, RADIUS_KM).catch(() => null),
+    ]);
+    if (token !== loadToken) return; // a newer step started while this one loaded
+
+    setRadarOverlay(frame);
+    updateChip(frame?.timeIso || null);
+    updateResetVisibility();
+
+    const reports = [...spc, ...(ncei?.reports || [])].sort((a, b) => (a.distanceKm || 0) - (b.distanceKm || 0));
+    let note = null;
+    if (!ncei) note = "The official NCEI Storm Events record couldn't be loaded.";
+    else if (ncei.pending) {
+      note = ncei.lastDay
+        ? `NCEI has published its official Storm Events record through ${formatDay(ncei.lastDay)}; newer days show SPC preliminary reports only.`
+        : "The official NCEI Storm Events record isn't available for this day yet.";
     }
+    renderReports(reports, reports.length ? null : reportsError, note);
+
+    if (frame) {
+      el.chipSub.classList.add("hidden");
+    } else {
+      el.chipSub.classList.remove("hidden");
+      el.chipSub.textContent = MRMS.isBeforeArchive(isoUtc)
+        ? "No radar before October 14, 2020 (start of NOAA's MRMS archive)."
+        : radarError || "No radar available for this time and area.";
+    }
+  }
+
+  function formatDay(isoDay) {
+    return new Date(isoDay + "T00:00:00Z").toLocaleDateString("en-US", {
+      timeZone: "UTC", month: "short", day: "numeric", year: "numeric",
+    });
   }
 
   function showResults() {
@@ -521,6 +678,11 @@
     const iso = toIsoUtc(el.date.value, el.time.value);
     if (!iso) {
       el.homeError.textContent = "Use date YYYY-MM-DD or YYYYMMDD, and time HH:mm or HHmm (UTC).";
+      el.homeError.classList.remove("hidden");
+      return;
+    }
+    if (MRMS.isBeforeArchive(iso)) {
+      el.homeError.textContent = "Radar is available from October 14, 2020 onward. Choose a later date.";
       el.homeError.classList.remove("hidden");
       return;
     }

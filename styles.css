@@ -15,6 +15,7 @@
   --tornado: #ff453a;
   --hail: #30d158;
   --wind: #0a84ff;
+  --flood: #40c8e0;
   --radius: 24px;
   --brand: "Outfit", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color-scheme: dark;
@@ -222,7 +223,7 @@ input[type="text"]:focus {
 .legend-bar {
   height: 5px; border-radius: 3px;
   background: linear-gradient(90deg, #8787e3, #6767c3, #3263c6, #224386, #00c600, #008600,
-                                     #ffc600, #ff8600, #d40000, #a50000, #c600c6, #860086);
+                                     #ffc600, #ff8600, #d40000, #a50000, #c600c6, #860086); /* mrms.js STOPS, 15–70 dBZ */
 }
 .legend-ticks { position: relative; height: 12px; margin-top: 2px; font-size: 9px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .legend-ticks b { position: absolute; top: 0; translate: -50% 0; font-weight: inherit; }
@@ -266,9 +267,11 @@ input[type="text"]:focus {
   font-size: 0.92rem;
   line-height: 1.35;
 }
+.reports li > * { grid-column: 2; }
 .reports li::before {
   content: "";
-  grid-row: span 3;
+  grid-column: 1;
+  grid-row: 1 / span 5;
   width: 10px; height: 10px; margin-top: 4px;
   border-radius: 50%;
   background: var(--dot, #8e8e93);
@@ -277,6 +280,12 @@ input[type="text"]:focus {
 .reports li.tornado { --dot: var(--tornado); }
 .reports li.hail { --dot: var(--hail); }
 .reports li.wind { --dot: var(--wind); }
+.reports li.flood { --dot: var(--flood); }
+.reports .comments {
+  margin-top: 4px; font-size: 0.78rem; line-height: 1.4; color: var(--text3);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.field-note { margin: 10px 2px 0; font-size: 0.8rem; color: var(--text3); }
 .reports .type { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dot, var(--text2)); }
 .reports .meta { color: var(--text2); font-size: 0.8rem; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .muted { margin: 0; padding: 4px 16px 16px; color: var(--text2); font-size: 0.9rem; }

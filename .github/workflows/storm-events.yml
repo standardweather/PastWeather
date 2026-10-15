@@ -1,0 +1,28 @@
+name: Update NCEI Storm Events
+
+# NCEI revises its yearly Storm Events files a few times a month; check weekly and commit only when a file changed.
+on:
+  schedule:
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 tools/storm_events.py
+      - name: Commit changes
+        run: |
+          git add data/storm-events
+          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update NCEI Storm Events data"
+          git push
