@@ -1,6 +1,7 @@
 name: Update NCEI Storm Events
 
 # NCEI revises its yearly Storm Events files a few times a month; check weekly and commit only when a file changed.
+# The History index (data/history) also takes in SPC preliminary reports for the days NCEI hasn't published yet.
 on:
   schedule:
     - cron: "17 9 * * 1"
@@ -18,11 +19,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 tools/storm_events.py
+      - run: python3 tools/hail_history.py
       - name: Commit changes
         run: |
-          git add data/storm-events
+          git add data/storm-events data/history
           if git diff --cached --quiet; then echo "No changes"; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "Update NCEI Storm Events data"
+          git commit -m "Update NCEI Storm Events and history data"
           git push
