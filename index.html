@@ -42,6 +42,30 @@
     .scrub .when { flex: 1; text-align: center; }
     .hint { padding: 1rem 1.25rem; font-size: 0.84rem; color: var(--text2); line-height: 1.55; }
     .hint b { color: #fff; }
+    .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
+    .actions a, .actions button { all: unset; cursor: pointer; font-size: 0.8rem; color: var(--accent); }
+    .actions a:hover, .actions button:hover { text-decoration: underline; }
+    .actions .cta { color: #060818; background: var(--accent); padding: 0.35rem 0.7rem; border-radius: 6px; font-weight: 600; }
+    .actions .cta:hover { text-decoration: none; filter: brightness(1.1); }
+    table.t tr.go { cursor: pointer; }
+    table.t tr.go:hover { background: rgba(255, 255, 255, 0.04); }
+    #printout { display: none; }
+    /* Print summary: the map, then the summary, reports and observations on white. */
+    body.printing .stage { width: 7.2in; height: 4.4in; flex: none; }
+    @media print {
+      @page { margin: 0.5in; }
+      body.console { height: auto; overflow: visible; background: #fff; }
+      .site-nav, .side, .scrub, .status, .leaflet-control-container .leaflet-control-zoom { display: none !important; }
+      .app { display: block; height: auto; }
+      .stage { width: 7.2in; height: 4.4in; break-inside: avoid; }
+      #printout { display: block; color: #111; font: 10pt/1.45 var(--font); }
+      #printout h1 { font: 600 16pt var(--brand); margin: 0.2in 0 0.05in; color: #000; }
+      #printout h2 { font: 600 11pt var(--brand); margin: 0.18in 0 0.05in; color: #000; border-bottom: 1px solid #bbb; }
+      #printout p { margin: 0.04in 0; max-width: none; color: #222; }
+      #printout table { width: 100%; border-collapse: collapse; font-size: 8.5pt; }
+      #printout th, #printout td { text-align: left; padding: 2px 4px; border-bottom: 1px solid #ddd; vertical-align: top; color: #111; }
+      #printout .meta { color: #555; font-size: 8.5pt; }
+    }
   </style>
 </head>
 <body class="console">
@@ -75,6 +99,7 @@
           <div><label for="date">Date (UTC)</label><input id="date" placeholder="YYYY-MM-DD" inputmode="numeric" /></div>
           <div><label for="time">Time (UTC)</label><input id="time" placeholder="HH:MM" inputmode="numeric" /></div>
         </div>
+        <div><label for="through">Through date (UTC, optional, up to 31 days)</label><input id="through" placeholder="YYYY-MM-DD" inputmode="numeric" /></div>
         <p class="err" id="err" hidden></p>
         <button class="btn" id="show" type="submit">Show past weather</button>
       </form>
@@ -82,11 +107,14 @@
         <button role="tab" data-view="summary" aria-selected="true">Summary</button>
         <button role="tab" data-view="reports" aria-selected="false">Reports</button>
         <button role="tab" data-view="obs" aria-selected="false">Observations</button>
+        <button role="tab" data-view="history" aria-selected="false">History</button>
       </div>
       <div class="scroll" id="panel">
         <div class="hint">Enter a place and a UTC date and time. PastWeather shows NOAA radar at that moment, the day's
           <b>hail-size</b> and <b>rotation</b> swaths, storm reports, and measured observations from the nearest stations.
-          Radar and swaths are available from October 14, 2020.</div>
+          Radar and swaths are available from October 14, 2020.
+          <br /><br />Add a <b>through date</b> to total wind and rain over a stretch of days, or leave the date blank to see
+          the place's <b>hail, wind and tornado history</b> back to 1950.</div>
       </div>
       <div class="side__foot">
         <h4>Map layers</h4>
@@ -95,9 +123,10 @@
           <label><input type="checkbox" data-layer="reports" checked /> Storm reports</label>
           <label><input type="checkbox" data-layer="hail" /> Hail size (24 h)</label>
           <label><input type="checkbox" data-layer="rotation" /> Rotation (24 h)</label>
+          <label><input type="checkbox" data-layer="rain" /> Rain (24 h)</label>
           <label><input type="checkbox" data-layer="stations" checked /> Stations</label>
         </div>
-        <p class="disclaimer">Radar, hail and rotation: NOAA MRMS. Reports: NOAA SPC (preliminary) and NCEI Storm Events (official).
+        <p class="disclaimer">Radar, hail, rotation and rain: NOAA MRMS. Reports: NOAA SPC (preliminary) and NCEI Storm Events (official).
           Observations: NCEI and the NWS. Not a substitute for a certified weather analysis.</p>
       </div>
     </aside>
@@ -114,12 +143,14 @@
     </section>
   </div>
 
+  <div id="printout" aria-hidden="true"></div>
+
   <footer class="site-footer">
     <p>&copy; 2026 Standard Weather Forensics &amp; Consulting · Not a substitute for a certified weather analysis.</p>
   </footer>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="/js/mrms.js?v=1"></script>
-  <script src="app.js?v=2"></script>
+  <script src="/js/mrms.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
