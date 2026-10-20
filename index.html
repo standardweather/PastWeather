@@ -1,120 +1,125 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>PastWeather</title>
-  <meta name="description" content="Look up archived radar and storm reports for a place and time." />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>PastWeather | Standard Weather</title>
+  <meta name="description" content="PastWeather — archived NOAA radar, hail and rotation swaths, storm reports and station observations for any place and time since October 2020." />
   <meta name="theme-color" content="#070914" />
-  <meta name="color-scheme" content="dark" />
-  <meta property="og:title" content="PastWeather" />
-  <meta property="og:description" content="Look up archived radar and storm reports for a place and time." />
-  <meta property="og:image" content="https://standardweather.github.io/PastWeather/assets/icon-512.png" />
-  <link rel="icon" type="image/png" sizes="64x64" href="assets/favicon-64.png" />
-  <link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
-  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+  <link rel="canonical" href="https://standardweather.github.io/PastWeather/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://standardweather.github.io/PastWeather/" />
+  <meta property="og:title" content="PastWeather | Standard Weather" />
+  <meta property="og:description" content="Archived radar, hail and rotation swaths, storm reports and observations for a place and time." />
+  <meta property="og:image" content="https://standardweather.github.io/logo.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;700&display=swap" />
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="icon" type="image/png" sizes="64x64" href="/assets/favicon-64.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/assets/icon-192.png" />
+  <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+  <meta name="color-scheme" content="dark" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=20261015a" />
+  <!-- Shared theme and console layout from the main site (standardweather.github.io repo). -->
+  <link rel="stylesheet" href="/css/site.css" />
+  <link rel="stylesheet" href="/css/console.css?v=1" />
+  <style>
+    /* PastWeather-only pieces. */
+    .report { border-top: 1px solid var(--rule); padding: 0.6rem 1.25rem; cursor: pointer; }
+    .report:hover { background: rgba(255, 255, 255, 0.03); }
+    .report .t { display: flex; justify-content: space-between; gap: 0.6rem; font: 600 0.88rem var(--brand); color: #fff; }
+    .report .t span { font: 0.74rem var(--mono); color: var(--text3); white-space: nowrap; }
+    .report .m { font-size: 0.78rem; color: var(--text2); }
+    .report .c { font-size: 0.76rem; color: var(--text3); margin-top: 0.2rem; line-height: 1.45; }
+    .report.sel { background: rgba(74, 209, 255, 0.07); box-shadow: inset 3px 0 0 var(--accent); }
+    .stat { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; padding: 0.35rem 0; border-top: 1px solid var(--rule); font-size: 0.82rem; }
+    .stat:first-of-type { border-top: 0; }
+    .stat b { font: 500 1rem var(--mono); color: #fff; }
+    .stat small { display: block; color: var(--text3); font-size: 0.72rem; }
+    .scrub .steps { display: flex; gap: 0.15rem; }
+    .scrub .steps button { padding: 0 0.25rem; font: 0.74rem var(--mono); color: var(--text2); }
+    .scrub .steps button:hover { color: #fff; }
+    .scrub .when { flex: 1; text-align: center; }
+    .hint { padding: 1rem 1.25rem; font-size: 0.84rem; color: var(--text2); line-height: 1.55; }
+    .hint b { color: #fff; }
+  </style>
 </head>
-<body>
-  <header class="brandbar">
-    <a class="brandbar-inner" href="./" aria-label="PastWeather home">
-      <img src="assets/logo@2x.png" srcset="assets/logo@2x.png 2x, assets/logo@3x.png 3x" width="30" height="30" alt="" />
-      <span class="wordmark"><span class="past">Past</span><span class="weather">Weather</span></span>
-    </a>
-  </header>
+<body class="console">
+  <nav class="site-nav" aria-label="Primary">
+    <div class="site-nav__inner">
+      <a class="site-nav__brand" href="/">
+        <img src="/assets/logo-light.png" width="32" height="32" alt="" />
+        Standard Weather
+      </a>
+      <ul class="site-nav__links">
+        <li><a href="/">Home</a></li>
+        <li><a href="/about.html">About</a></li>
+        <li><a href="/PastWeather/" aria-current="page">PastWeather</a></li>
+        <li><a href="/NowWeather/">NowWeather</a></li>
+        <li><a href="/FutureWeather/">FutureWeather</a></li>
+        <li><a href="/TropicalWeather/">TropicalWeather</a></li>
+        <li><a href="/AviationWeather/">AviationWeather</a></li>
+      </ul>
+    </div>
+  </nav>
 
-  <main id="screen-home" class="wrap">
-    <section class="hero">
-      <img class="hero-icon" src="assets/icon-192.png" width="96" height="96" alt="PastWeather app icon" />
-      <h1 class="wordmark"><span class="past">Past</span><span class="weather">Weather</span></h1>
-      <p class="helper">Archived radar and storm reports</p>
-    </section>
-
-    <section class="glass form">
-      <div class="field">
-        <label for="location">Location</label>
-        <div class="input-icon">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="M16 16l4.5 4.5" /></svg>
-          <input id="location" type="text" placeholder="Address, place, or lat, lon" autocomplete="off" />
+  <div class="app">
+    <aside class="side" aria-label="Event">
+      <div class="side__head"><h1><span>Past</span>Weather</h1><time id="when"></time></div>
+      <form class="form" id="query" autocomplete="off">
+        <div>
+          <label for="location">Location</label>
+          <input id="location" placeholder="City, ST · street address · lat, lon" />
         </div>
-      </div>
-      <div class="row">
-        <div class="field date">
-          <label for="date">Date (UTC)</label>
-          <input id="date" type="text" placeholder="YYYY-MM-DD" inputmode="numeric" autocomplete="off" />
+        <div class="row2">
+          <div><label for="date">Date (UTC)</label><input id="date" placeholder="YYYY-MM-DD" inputmode="numeric" /></div>
+          <div><label for="time">Time (UTC)</label><input id="time" placeholder="HH:MM" inputmode="numeric" /></div>
         </div>
-        <div class="field">
-          <label for="time">Time (UTC)</label>
-          <input id="time" type="text" placeholder="HH:mm" inputmode="numeric" autocomplete="off" />
+        <p class="err" id="err" hidden></p>
+        <button class="btn" id="show" type="submit">Show past weather</button>
+      </form>
+      <div class="tabs" role="tablist" aria-label="View" id="views">
+        <button role="tab" data-view="summary" aria-selected="true">Summary</button>
+        <button role="tab" data-view="reports" aria-selected="false">Reports</button>
+        <button role="tab" data-view="obs" aria-selected="false">Observations</button>
+      </div>
+      <div class="scroll" id="panel">
+        <div class="hint">Enter a place and a UTC date and time. PastWeather shows NOAA radar at that moment, the day's
+          <b>hail-size</b> and <b>rotation</b> swaths, storm reports, and measured observations from the nearest stations.
+          Radar and swaths are available from October 14, 2020.</div>
+      </div>
+      <div class="side__foot">
+        <h4>Map layers</h4>
+        <div class="checks" id="layers">
+          <label><input type="checkbox" data-layer="radar" checked /> Radar</label>
+          <label><input type="checkbox" data-layer="reports" checked /> Storm reports</label>
+          <label><input type="checkbox" data-layer="hail" /> Hail size (24 h)</label>
+          <label><input type="checkbox" data-layer="rotation" /> Rotation (24 h)</label>
+          <label><input type="checkbox" data-layer="stations" checked /> Stations</label>
         </div>
+        <p class="disclaimer">Radar, hail and rotation: NOAA MRMS. Reports: NOAA SPC (preliminary) and NCEI Storm Events (official).
+          Observations: NCEI and the NWS. Not a substitute for a certified weather analysis.</p>
       </div>
-      <p class="field-note">Radar is available from October 14, 2020 onward.</p>
+    </aside>
 
-      <p id="home-error" class="error hidden"></p>
-      <button id="btn-show" class="btn" type="button">Show past weather</button>
-    </section>
-
-    <p class="footnote">
-      Radar from NOAA MRMS (October 14, 2020 to present). Storm reports from NOAA SPC and NCEI Storm Events.
-      Place search from the US Census Bureau and USGS. Times are UTC.
-    </p>
-  </main>
-
-  <main id="screen-results" class="wrap hidden">
-    <nav class="nav">
-      <button type="button" class="back" id="btn-back" aria-label="Back">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" /></svg>
-      </button>
-      <div class="event">
-        <div id="chip-main"></div>
-        <div id="chip-sub" class="sub hidden"></div>
-      </div>
-    </nav>
-
-    <section class="glass panel">
-      <div class="panel-title">Radar</div>
+    <section class="stage" aria-label="Map">
       <div id="map"></div>
-      <div class="map-opts">
-        <label class="map-opt">
-          <input type="checkbox" id="show-reports-map" role="switch" checked />
-          Show storm reports on map
-        </label>
-        <div class="legend" aria-label="Reflectivity scale, 15 to 70 dBZ">
-          <span class="legend-unit">dBZ</span>
-          <div class="legend-scale">
-            <div class="legend-bar"></div>
-            <div class="legend-ticks"><b style="left:0">15</b><b style="left:27.3%">30</b><b style="left:54.5%">45</b><b style="left:81.8%">60</b><b style="left:100%">70</b></div>
-          </div>
-        </div>
-      </div>
-      <div class="step-block">
-        <div class="step-label">Step time (minutes)</div>
-        <div class="step-rows">
-          <div class="step-row" id="step-back"></div>
-          <div class="step-row" id="step-fwd"></div>
-        </div>
-        <button type="button" id="btn-reset" class="reset-link hidden">Reset to selected time</button>
+      <div class="status" id="status" hidden></div>
+      <div class="scrub" id="scrub" hidden>
+        <div class="steps" aria-label="Step back"><button data-step="-60">−60</button><button data-step="-15">−15</button><button data-step="-5">−5</button></div>
+        <span class="when" id="frameTime"></span>
+        <div class="steps" aria-label="Step forward"><button data-step="5">+5</button><button data-step="15">+15</button><button data-step="60">+60</button></div>
+        <button id="reset" title="Back to the event time" hidden>⟲</button>
       </div>
     </section>
+  </div>
 
-    <section class="glass panel">
-      <div class="panel-title">Storm reports</div>
-      <div id="reports"></div>
-    </section>
-
-    <p class="footnote">
-      Radar from NOAA MRMS seamless hybrid-scan reflectivity (October 14, 2020 to present). Storm reports from
-      NOAA SPC (preliminary) and NCEI Storm Events (official).
-      Not a substitute for a certified weather analysis.
-    </p>
-  </main>
+  <footer class="site-footer">
+    <p>&copy; 2026 Standard Weather Forensics &amp; Consulting · Not a substitute for a certified weather analysis.</p>
+  </footer>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="mrms.js?v=20261015a"></script>
-  <script src="app.js?v=20261015a"></script>
+  <script src="mrms.js?v=2"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>
