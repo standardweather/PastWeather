@@ -8,6 +8,9 @@
  *   NWS API                          observations for the last few days, before NCEI has them
  *   Census TIGERweb / Geocoder, USGS GNIS   place search
  *   data/history (tools/hail_history.py)    hail, wind and tornado reports since 1950 for the History view
+ *   Iowa Environmental Mesonet       archive of NWS warnings, watches and advisories (storm-based polygons by point)
+ *   NOAA GOES GLM (noaa-goes16/17/18/19)   lightning flashes, read with range requests by glm.js
+ *   NOAA ACIS (data.rcc-acis.org)    daily climate records and 1991–2020 normals at the nearest long-record station
  * A search is kept in the URL (?loc=…&date=…&time=…&through=…) so a view can be shared. The last place searched is
  * remembered (localStorage "sw-place") so the other Standard Weather pages can offer it.
  */
@@ -39,8 +42,11 @@
     reports: [], reportNote: null, selectedReport: null,
     hail: null, rotation: null,
     stations: [], obsNote: null,
+    warnings: null,       // NWS warnings, watches and advisories that covered the place: { list, shapes } | { loading } | { error }
+    lightning: null,      // GOES lightning flashes near the place around the event time (see loadLightning)
+    climate: null,        // normals and records at the nearest long-record climate station (see loadClimate)
     radarInfo: null, loadToken: 0,
-    on: { radar: true, reports: true, hail: false, rotation: false, rain: false, stations: true },
+    on: { radar: true, reports: true, hail: false, rotation: false, rain: false, warnings: true, lightning: true, stations: true },
   };
 
   // —— Small helpers ————————————————————————————————————————————————
@@ -431,7 +437,7 @@
   const map = L.map("map", { zoomControl: false, minZoom: 3, maxZoom: 13 }).setView([38.5, -96], 4);
   L.control.zoom({ position: "topright" }).addTo(map);
   map.attributionControl.setPrefix("");
-  [["radar", 300], ["swath", 340], ["points", 620], ["labels", 640]].forEach(([n, z]) => { map.createPane(n).style.zIndex = z; });
+  [["radar", 300], ["swath", 340], ["lightning", 600], ["points", 620], ["labels", 640]].forEach(([n, z]) => { map.createPane(n).style.zIndex = z; });
   map.getPane("labels").style.pointerEvents = "none";
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", { maxZoom: 16, attribution: "Esri" }).addTo(map);
   L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}", { maxZoom: 16, pane: "labels", opacity: 0.85 }).addTo(map);
@@ -440,7 +446,8 @@
   const Legend = L.Control.extend({ options: { position: "bottomright" }, onAdd() { const d = L.DomUtil.create("div", "maplegend"); d.id = "legend"; return d; } });
   new Legend().addTo(map);
 
-  const layers = { radar: L.layerGroup(), hail: L.layerGroup(), rotation: L.layerGroup(), rain: L.layerGroup(), reports: L.layerGroup(), stations: L.layerGroup(), poi: L.layerGroup().addTo(map) };
+  const layers = { radar: L.layerGroup(), hail: L.layerGroup(), rotation: L.layerGroup(), rain: L.layerGroup(), warnings: L.layerGroup(), lightning: L.layerGroup(),
+    reports: L.layerGroup(), stations: L.layerGroup(), poi: L.layerGroup().addTo(map) };
   Object.entries(state.on).forEach(([k, v]) => { if (v) layers[k].addTo(map); });
   const reportMarkers = {};
 
@@ -495,6 +502,10 @@
     if (state.on.radar) parts.push(`<h5 class="sub">Reflectivity (dBZ)</h5><div class="ramp" style="background:linear-gradient(90deg,#8787e3,#3263c6,#00c600,#008600,#ffc600,#ff8600,#d40000,#c600c6)"></div><div class="ticks"><span>15</span><span>30</span><span>45</span><span>60</span><span>70</span></div>`);
     if (state.on.hail) parts.push(`<h5 class="sub">Maximum hail size, 24 h (inches)</h5><div class="key">${MRMS.legends.hail.map(([inch, c]) => `<span><i style="background:rgb(${c})"></i>${inch.toFixed(2).replace(/0$/, "")}+</span>`).join("")}</div>`);
     if (state.on.rain) parts.push(`<h5 class="sub">Rain, 24 h (inches, radar + gauges)</h5><div class="key">${MRMS.legends.rain.map(([inch, c]) => `<span><i style="background:rgb(${c})"></i>${+inch.toFixed(2)}+</span>`).join("")}</div>`);
+    if (state.on.warnings && state.warnings?.shapes?.length) parts.push(`<h5 class="sub">Warnings covering the place</h5><div class="key">${[["TO", "Tornado"], ["SV", "Severe thunderstorm"], ["FF", "Flood"], ["SQ", "Snow squall"]]
+      .filter(([k]) => state.warnings.shapes.some((f) => (f.properties.phenomena === k) || (k === "FF" && /^F[AL]$/.test(f.properties.phenomena)) || (k === "SV" && f.properties.phenomena === "MA")))
+      .map(([k, label]) => `<span><i style="background:${WARN_COLOR[k]}"></i>${label}</span>`).join("")}</div>`);
+    if (state.on.lightning && state.lightning?.flashes?.length) parts.push(`<h5 class="sub">Lightning flashes (GOES)</h5><div class="key"><span><i style="background:#ffe14a"></i>Before the event</span><span><i style="background:#ff9f0a"></i>After</span></div>`);
     if (state.on.rotation) parts.push(`<h5 class="sub">Rotation, 24 h (×10⁻³ s⁻¹)</h5><div class="key">${MRMS.legends.rotation.map(([s, c]) => `<span><i style="background:rgb(${c})"></i>${s}+</span>`).join("")}</div>`);
     $("legend").innerHTML = parts.join("");
   }
@@ -530,12 +541,21 @@
       html += stat(range ? "Rain, period" : "Rain, 24 h", rr.total != null ? `${(rr.total / 25.4).toFixed(2)}"` : "—",
         rr.total != null ? `Radar and gauges at the location (MRMS)${rr.missing ? ` · ${rr.missing} day${rr.missing === 1 ? "" : "s"} unavailable` : ""}` : rr.loading ? "Loading…" : "No rainfall analysis for this period");
     }
+    const wn = state.warnings;
+    if (wn) {
+      const t = Date.parse(q.isoUtc), on = wn.list ? wn.list.filter((x) => activeAt(x, t)) : [];
+      const during = wn.list ? `${wn.list.length || "None"} during the ${range ? "period" : "day"}` : "";
+      html += stat("NWS warnings at the time", wn.loading ? "…" : wn.error ? "—" : on.length ? "Yes" : "None",
+        wn.loading ? "Loading NWS warnings…" : wn.error ? "NWS warnings couldn't be loaded" : on.length ? `${on.map((x) => `${esc(x.name)} ${esc(warnSpan(x))}`).join(" · ")} · ${during}` : `Nothing in effect at the location · ${during}`);
+    }
+    html += lightningStat();
     html += stat("Storm reports", `${r.length}`, `within ${Math.round(RADIUS_KM * 0.621371)} mi · ${count("tornado")} tornado · ${count("hail")} hail · ${count("wind")} wind`);
     const nh = nearest("hail"), nw = nearest("wind"), nt = nearest("tornado");
     if (nh) html += stat("Nearest hail report", `${miles(nh.distanceKm)} mi`, `${esc(nh.magnitude || "")} · ${esc(nh.location)} · ${hhmmZ(nh.timeUtc)}`);
     if (nw) html += stat("Nearest wind report", `${miles(nw.distanceKm)} mi`, `${esc(nw.magnitude || "")} · ${esc(nw.location)} · ${hhmmZ(nw.timeUtc)}`);
     if (nt) html += stat("Nearest tornado report", `${miles(nt.distanceKm)} mi`, `${esc(nt.magnitude || "")} · ${esc(nt.location)} · ${hhmmZ(nt.timeUtc)}`);
     if (s0) html += stat(`Peak wind, ${esc(s0.name)}`, s0.peak ? `${Math.round(s0.peak.g)} mph` : "—", `${miles(s0.km)} mi away${s0.peak ? ` · ${range ? esc(formatDisplayUtc(isoMin(s0.peak.t))) : hhmmZ(isoMin(s0.peak.t))}` : ""}${s0.precip != null ? ` · ${s0.precip.toFixed(2)}" rain over the ${range ? "period" : "day"}` : ""}`);
+    html += climateStats(stat);
     html += range ? `<p class="note">Reports, observations and rain cover every SPC convective day (1200 to 1200 UTC) in the period. Radar, hail and rotation show the event day.</p>`
       : `<p class="note">Day shown: ${esc(formatDisplayUtc(isoMin(spcDayStart(q.isoUtc))))} to 1200 UTC the next day (the SPC convective day).</p>`;
     if (state.reportNote) html += `<p class="note">${esc(state.reportNote)}</p>`;
@@ -720,6 +740,260 @@
     await Promise.all([worker(), worker(), worker()]);
   }
 
+  // —— NWS warnings at the place (the Iowa Environmental Mesonet's archive of NWS VTEC products) ————————————
+  const IEM = "https://mesonet.agron.iastate.edu";
+  // These have been issued as storm-based polygons since October 2008; everything else covers whole counties or zones.
+  const POLYGON_SINCE = Date.UTC(2008, 9, 1);
+  const POLYGON_TYPES = new Set(["TO.W", "SV.W", "FF.W", "MA.W", "SQ.W", "EW.W", "DS.W", "FA.W", "FL.W"]);
+  const WARN_COLOR = { TO: "#ff2d55", SV: "#ffb000", FF: "#30d158", FA: "#30d158", FL: "#30d158", MA: "#ffb000", SQ: "#d24dff", EW: "#ff8c00", DS: "#e0c097" };
+  const ymd = (ms) => isoMin(ms).slice(0, 10);
+  const warnKey = (w) => `${w.wfo}.${w.phenomena}.${w.significance}.${w.eventid}`;
+  const activeAt = (w, t) => w.issueMs <= t && t < w.expireMs;
+
+  async function loadWarnings(q) {
+    const from = spcDayStart(q.isoUtc), to = rangeEnd(q);
+    const qs = `lat=${q.lat.toFixed(4)}&lon=${q.lon.toFixed(4)}&sdate=${ymd(from - 86_400_000)}&edate=${ymd(to + 86_400_000)}`;
+    const [zones, polys] = await Promise.all([
+      getJson(`${IEM}/json/vtec_events_bypoint.py?${qs}`).then((d) => d?.events || []),
+      getJson(`${IEM}/json/sbw_by_point.py?${qs}`).then((d) => d?.sbws || []),
+    ]);
+    const seen = new Set();
+    const list = [...polys.map((w) => ({ ...w, storm: true })), ...zones.filter((w) => to <= POLYGON_SINCE || !POLYGON_TYPES.has(`${w.phenomena}.${w.significance}`))]
+      .map((w) => ({ ...w, issueMs: Date.parse(w.issue), expireMs: Date.parse(w.expire) }))
+      .filter((w) => w.issueMs < to && w.expireMs > from && !seen.has(warnKey(w)) && seen.add(warnKey(w)))
+      .sort((a, b) => a.issueMs - b.issueMs);
+    // Outlines for the storm-based warnings that covered the place.
+    let shapes = [];
+    const storm = list.filter((w) => w.storm);
+    if (storm.length) {
+      const keys = new Set(storm.map(warnKey));
+      const wfos = [...new Set(storm.map((w) => w.wfo))].join(",");
+      const gj = await getJson(`${IEM}/geojson/sbw.geojson?sts=${isoMin(from)}&ets=${isoMin(to)}&wfos=${wfos}`).catch(() => null);
+      shapes = (gj?.features || []).filter((f) => keys.has(warnKey(f.properties)));
+    }
+    return { list, shapes, countyBased: from < POLYGON_SINCE };
+  }
+
+  function warningTags(w) {
+    const tags = [];
+    if (w.issue_hailtag) tags.push(`hail ${w.issue_hailtag}"`);
+    if (w.issue_windtag) tags.push(`wind ${w.issue_windtag} mph`);
+    if (w.issue_tornadotag) tags.push(`tornado ${String(w.issue_tornadotag).toLowerCase()}`);
+    const dmg = w.issue_damagetag || w.issue_tornadodamagetag || w.issue_thunderstormdamagetag;
+    if (dmg) tags.push(`damage threat ${String(dmg).toLowerCase()}`);
+    return tags;
+  }
+  const warnSpan = (w) => `${hhmmZ(w.issueMs)} to ${w.expireMs - w.issueMs < 86_400_000 ? hhmmZ(w.expireMs) : formatDisplayUtc(isoMin(w.expireMs))}`;
+
+  function drawWarnings() {
+    layers.warnings.clearLayers();
+    const w = state.warnings;
+    if (!w?.shapes?.length) return;
+    const t = Date.parse(state.query.isoUtc);
+    // Polygons in effect at the event time on top and solid; the rest of the day's outlines dashed.
+    const shapes = w.shapes.slice().sort((a, b) => Number(activeAt({ issueMs: Date.parse(a.properties.polygon_begin), expireMs: Date.parse(a.properties.polygon_end) }, t)) -
+      Number(activeAt({ issueMs: Date.parse(b.properties.polygon_begin), expireMs: Date.parse(b.properties.polygon_end) }, t)));
+    for (const f of shapes) {
+      const p = f.properties;
+      const on = activeAt({ issueMs: Date.parse(p.polygon_begin), expireMs: Date.parse(p.polygon_end) }, t);
+      L.geoJSON(f, { pane: "swath", interactive: true, style: { color: WARN_COLOR[p.phenomena] || "#fff", weight: on ? 2.5 : 1.2, opacity: on ? 0.95 : 0.6, dashArray: on ? null : "4 4", fill: on, fillOpacity: 0.08 } })
+        .bindTooltip(`${esc(p.ps)} · ${hhmmZ(Date.parse(p.polygon_begin))} to ${hhmmZ(Date.parse(p.polygon_end))}${p.status && p.status !== "NEW" ? " (update)" : ""}`, { className: "tw-tip", sticky: true })
+        .addTo(layers.warnings);
+    }
+  }
+
+  function warningRow(w, t) {
+    const on = activeAt(w, t);
+    return `<div class="report${on ? " sel" : ""}">
+      <div class="t"><span style="color:#fff;font:600 .88rem var(--brand)"><i class="dot" style="background:${WARN_COLOR[w.phenomena] || "#8e8e93"}"></i>${esc(w.name)}</span><span>${esc(warnSpan(w))}</span></div>
+      <div class="m">NWS ${esc(w.wfo)}${w.storm ? " · storm-based polygon" : w.ugc ? ` · ${esc(w.ugc)}` : ""}${on ? " · <b style=\"color:#fff\">in effect at the event time</b>" : ""}</div>
+      ${warningTags(w).length ? `<div class="c">Issued with ${esc(warningTags(w).join(" · "))}</div>` : ""}
+      <div class="c"><a href="${esc(IEM + w.url)}" target="_blank" rel="noopener">Product text</a></div></div>`;
+  }
+
+  function warningsView() {
+    if (!state.query) return summaryView();
+    const w = state.warnings;
+    if (!w || w.loading) return `<p class="empty">Loading NWS warnings…</p>`;
+    if (w.error) return `<p class="empty">NWS warnings couldn't be loaded (${esc(w.error)}).</p>`;
+    const t = Date.parse(state.query.isoUtc);
+    const on = w.list.filter((x) => activeAt(x, t));
+    const period = isRange(state.query) ? "the period" : "the day";
+    let html = `<div class="pad" style="padding-bottom:.5rem"><h5 class="sub">In effect at ${esc(formatDisplayUtc(state.query.isoUtc))}</h5>
+      <p class="note" style="margin:.2rem 0 0">${on.length ? on.map((x) => esc(x.name)).join(", ") : "No warnings, watches or advisories covered the location at that time."}</p>
+      ${w.list.length ? `<div class="actions"><button type="button" data-action="csv-warnings">Download CSV</button></div>` : ""}</div>`;
+    html += w.list.length ? `<h5 class="sub" style="padding:0 1.25rem .4rem">All during ${period} (${w.list.length})</h5>` + w.list.map((x) => warningRow(x, t)).join("")
+      : `<p class="empty">None during ${period}.</p>`;
+    return html + `<p class="empty">Storm-based warnings (tornado, severe thunderstorm, flash flood and others) count only when their polygon covered the location${w.countyBased ? "; before October 2008 they were issued for whole counties" : ""}. Watches and advisories cover whole counties or zones.
+      From the NWS warnings archive kept by the Iowa Environmental Mesonet (Iowa State University).</p>`;
+  }
+
+  // —— Lightning near the place (GOES Geostationary Lightning Mapper, read by glm.js) ——————————————
+  const LIGHTNING_KM = 25 / 0.621371;
+  const LIGHTNING_WINDOWS = [15, 30, 60];
+  const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  function bearing(lat1, lon1, lat2, lon2) {
+    const r = Math.PI / 180;
+    const y = Math.sin((lon2 - lon1) * r) * Math.cos(lat2 * r);
+    const x = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lon2 - lon1) * r);
+    return COMPASS[Math.round((((Math.atan2(y, x) / r) + 360) % 360) / 45) % 8];
+  }
+  const hmsZ = (ms) => { const d = new Date(ms); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}Z`; };
+
+  async function loadLightning(q, minutes) {
+    const t = Date.parse(q.isoUtc);
+    const lt = state.lightning = { minutes, loading: true, done: 0, total: 0 };
+    if (t + minutes * 60e3 < GLM.start) { Object.assign(lt, { loading: false, unavailable: "GOES lightning data start January 1, 2018." }); return render(); }
+    if (t - minutes * 60e3 > Date.now() - 5 * 60e3) { Object.assign(lt, { loading: false, unavailable: "That time hasn't happened yet." }); return render(); }
+    render();
+    let shown = 0;
+    try {
+      const r = await GLM.flashesNear(t - minutes * 60e3, Math.min(t + minutes * 60e3, Date.now()), q.lat, q.lon, LIGHTNING_KM, (done, total) => {
+        lt.done = done; lt.total = total;
+        if (state.lightning === lt && done - shown >= 8 && (state.view === "summary" || state.view === "lightning")) { shown = done; render(); }
+      });
+      Object.assign(lt, r);
+    } catch (e) {
+      lt.error = e.message;
+    }
+    if (state.lightning !== lt || state.query !== q) return;
+    lt.loading = false;
+    drawLightning();
+    drawLegend();
+    render();
+  }
+
+  function drawLightning() {
+    layers.lightning.clearLayers();
+    const lt = state.lightning;
+    if (!lt?.flashes) return;
+    const t = Date.parse(state.query.isoUtc);
+    for (const f of lt.flashes) {
+      L.circleMarker([f.lat, f.lon], { pane: "lightning", radius: 2.6, color: "#060818", weight: 0.6, fillColor: f.t < t ? "#ffe14a" : "#ff9f0a", fillOpacity: 0.85 })
+        .bindTooltip(`Flash ${hmsZ(f.t)} · ${miles(f.km)} mi ${bearing(state.query.lat, state.query.lon, f.lat, f.lon)}`, { className: "tw-tip", direction: "top", offset: [0, -4] })
+        .addTo(layers.lightning);
+    }
+  }
+
+  function lightningStat() {
+    const lt = state.lightning;
+    if (!lt) return "";
+    const label = `Lightning, ±${lt.minutes < 60 ? `${lt.minutes} min` : "1 hour"}`;
+    const stat = (value, small) => `<div class="stat"><span>${label}<small>${small}</small></span><b>${value}</b></div>`;
+    if (lt.unavailable) return stat("—", esc(lt.unavailable));
+    if (lt.loading) return stat("…", lt.total ? `Reading GOES lightning files, ${lt.done} of ${lt.total}` : "Finding GOES lightning files…");
+    if (lt.error) return stat("—", `Lightning couldn't be loaded (${esc(lt.error)})`);
+    const near = lt.flashes.reduce((m, f) => (!m || f.km < m.km ? f : m), null);
+    const within10 = lt.flashes.filter((f) => f.km <= 10 / 0.621371).length;
+    return stat(near ? `${miles(near.km)} mi` : "None", near
+      ? `Closest flash at ${hmsZ(near.t)} · ${within10} within 10 mi · ${lt.flashes.length} within 25 mi · ${esc(lt.satellite)} GLM`
+      : `No flashes detected within 25 mi${lt.satellite ? ` · ${esc(lt.satellite)} GLM` : ""}`);
+  }
+
+  function lightningView() {
+    if (!state.query) return summaryView();
+    const lt = state.lightning;
+    const t = Date.parse(state.query.isoUtc);
+    const minutes = lt?.minutes || LIGHTNING_WINDOWS[0];
+    let html = `<div class="pad"><div class="satpick" style="margin:0 0 .5rem" role="group" aria-label="Time window"><span>Within</span>${LIGHTNING_WINDOWS.map((m) =>
+      `<button type="button" data-lightning="${m}" aria-pressed="${m === minutes}">±${m < 60 ? `${m} min` : "1 hour"}</button>`).join("")}</div>${lightningStat()}`;
+    if (lt?.flashes?.length) {
+      const counts = [1, 3, 10, 25].map((mi) => `<div>${lt.flashes.filter((f) => f.km <= mi / 0.621371).length}<small>within ${mi} mi</small></div>`).join("");
+      html += `<div class="counts" style="margin-top:.6rem">${counts}</div>
+        <div class="actions"><button type="button" data-action="csv-lightning">Download CSV</button></div>`;
+    }
+    html += `</div>`;
+    if (lt?.flashes?.length) {
+      const list = lt.flashes.slice().sort((a, b) => a.km - b.km).slice(0, 50);
+      html += `<div class="pad" style="padding-top:0"><table class="t"><thead><tr><th>UTC</th><th>Distance</th><th>From the place</th><th>vs event</th></tr></thead><tbody>${list.map((f) =>
+        `<tr><td>${hmsZ(f.t)}</td><td>${miles(f.km)} mi</td><td>${bearing(state.query.lat, state.query.lon, f.lat, f.lon)}</td><td>${f.t < t ? "−" : "+"}${Math.round(Math.abs(f.t - t) / 60e3)} min</td></tr>`).join("")}</tbody></table></div>`;
+      if (lt.flashes.length > 50) html += `<p class="empty">The closest 50 of ${lt.flashes.length} flashes. The CSV has all of them.</p>`;
+    }
+    if (lt?.failed) html += `<p class="empty">${lt.failed} of ${lt.files} lightning files couldn't be read, so a few flashes may be missing.</p>`;
+    return html + `<p class="empty">Flashes seen from orbit by NOAA's GOES Geostationary Lightning Mapper, which detects most lightning but locates it only to about 3–6 miles.
+      Distances are approximate, and a flash nearby doesn't confirm a strike at the location. Data start January 1, 2018.</p>`;
+  }
+
+  // —— Climate context (NOAA Regional Climate Centers' Applied Climate Information System) ——————————————
+  const ACIS = "https://data.rcc-acis.org";
+  async function acis(path, body) {
+    const res = await fetch(`${ACIS}/${path}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`ACIS ${res.status}`);
+    const json = await res.json();
+    if (json.error) throw new Error(json.error);
+    return json;
+  }
+  const ordinal = (n) => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+  const acisNum = (v) => (v === "T" ? 0.001 : v == null || v === "M" || v === "S" ? null : Number.isFinite(parseFloat(v)) ? parseFloat(v) : null);
+
+  async function loadClimate(q) {
+    // Station records are kept by local day; the longitude gives the local (standard time) date closely enough.
+    const localDay = (ms) => ymd(ms + (q.lon / 15) * 3600e3);
+    const first = localDay(Date.parse(q.isoUtc));
+    const last = q.endMs ? localDay(q.endMs - 86_400_000) : first;
+    const days = Math.round((Date.parse(last) - Date.parse(first)) / 86_400_000) + 1;
+    const year = Number(last.slice(0, 4));
+    // Airport (first-order) stations keep a midnight-to-midnight day, which lines up with an event's evening; many
+    // cooperative observers end their day in the morning. So an airport within about 40 miles beats a closer co-op.
+    let station = null;
+    for (const d of [0.6, 1.2]) {
+      const meta = await acis("StnMeta", { bbox: [q.lon - d * 1.3, q.lat - d, q.lon + d * 1.3, q.lat + d].map((v) => +v.toFixed(3)).join(","),
+        elems: "pcpn,maxt", sdate: first, edate: last, meta: "name,sids,ll,valid_daterange" });
+      const ok = (meta.meta || []).filter((s) => {
+        const r = s.valid_daterange?.[0];
+        return s.ll && r?.length === 2 && Number(r[0].slice(0, 4)) <= year - 30 && r[1] >= last;
+      }).map((s) => ({ ...s, km: distanceKm(q.lat, q.lon, s.ll[1], s.ll[0]), temps: s.valid_daterange[1]?.length === 2 && s.valid_daterange[1][1] >= last,
+        airport: s.sids.some((id) => / [15]$/.test(id)) }));
+      ok.sort((a, b) => a.km - b.km);
+      station = ok.find((s) => s.airport && s.km <= 65) || ok[0] || null;
+      if (station) break;
+    }
+    if (!station) return { none: true };
+    const since = Number(station.valid_daterange[0][0].slice(0, 4)) + 1;
+    const span = (name, reduce, extra = {}) => ({ name, interval: [1, 0, 0], duration: days, reduce, ...extra });
+    const data = await acis("StnData", {
+      sid: station.sids[0].split(" ")[0], sdate: `${since}-${last.slice(5)}`, edate: last,
+      elems: [span("maxt", "max"), span("mint", "min"), span("pcpn", "sum"), span("snow", "sum"),
+        span("maxt", "mean", { normal: "1" }), span("mint", "mean", { normal: "1" }), span("pcpn", "sum", { normal: "1" }), span("snow", "sum", { normal: "1" })],
+    });
+    const rows = (data.data || []).filter((r) => r[0].slice(5) === last.slice(5));
+    const now = rows.find((r) => r[0] === last);
+    if (!now) return { none: true };
+    const col = (i) => rows.map((r) => acisNum(r[i])).filter((v) => v != null);
+    const rank = (i, higher) => {
+      const v = acisNum(now[i]), all = col(i);
+      return v == null || all.length < 20 || last.slice(5) === "02-29" ? null : { n: all.length, r: 1 + all.filter((x) => (higher ? x > v : x < v)).length };
+    };
+    return {
+      station, first, last, days,
+      high: acisNum(now[1]), low: acisNum(now[2]), pcpn: acisNum(now[3]), snow: acisNum(now[4]),
+      nHigh: acisNum(now[5]), nLow: acisNum(now[6]), nPcpn: acisNum(now[7]), nSnow: acisNum(now[8]),
+      rankHighWarm: rank(1, true), rankHighCold: rank(1, false), rankLowWarm: rank(2, true), rankLowCold: rank(2, false),
+      rankPcpn: rank(3, true), rankSnow: rank(4, true),
+    };
+  }
+
+  function climateStats(stat) {
+    const c = state.climate;
+    if (!c) return "";
+    if (c.loading) return stat("Climate", "…", "Loading normals and records…");
+    if (c.error || c.none) return stat("Climate", "—", c.error ? `Normals and records couldn't be loaded (${esc(c.error)})` : "No long-record climate station nearby");
+    const md = (s) => new Date(s + "T00:00:00Z").toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
+    const when = c.days > 1 ? `${md(c.first)}–${md(c.last)}` : md(c.last);
+    const rankText = (rk, word) => (!rk || rk.r > 10 ? "" : rk.r === 1 ? `${word} on record for ${when} (${rk.n} years)` : `${ordinal(rk.r)} ${word} for ${when} in ${rk.n} years`);
+    const inch = (v) => (v == null ? "—" : v > 0 && v < 0.01 ? "Trace" : `${v.toFixed(2)}"`);
+    let html = stat("Climate station", `${miles(c.station.km)} mi`, `${esc(c.station.name)} · records since ${c.station.valid_daterange[0][0].slice(0, 4)}${c.station.airport ? "" : " · co-op observer, whose day may end in the morning"} · NOAA ACIS`);
+    if (c.days === 1 && c.station.temps && (c.high != null || c.low != null)) {
+      const hiRank = c.high != null && c.nHigh != null ? rankText(c.high >= c.nHigh ? c.rankHighWarm : c.rankHighCold, c.high >= c.nHigh ? "warmest high" : "coldest high") : "";
+      const loRank = c.low != null && c.nLow != null ? rankText(c.low >= c.nLow ? c.rankLowWarm : c.rankLowCold, c.low >= c.nLow ? "warmest low" : "coldest low") : "";
+      html += stat(`High / low, ${when}`, `${c.high ?? "—"}° / ${c.low ?? "—"}°`,
+        [c.nHigh != null ? `Normal ${Math.round(c.nHigh)}° / ${Math.round(c.nLow)}°` : "", hiRank, loRank].filter(Boolean).join(" · "));
+    }
+    html += stat(`Precipitation, ${when}`, inch(c.pcpn), [c.nPcpn != null ? `Normal ${c.nPcpn.toFixed(2)}"` : "", c.pcpn >= 0.01 ? rankText(c.rankPcpn, "highest total") : ""].filter(Boolean).join(" · "));
+    if (c.snow >= 0.1) html += stat(`Snowfall, ${when}`, `${c.snow.toFixed(1)}"`, [c.nSnow != null ? `Normal ${c.nSnow.toFixed(1)}"` : "", c.snow >= 0.1 ? rankText(c.rankSnow, "most snow") : ""].filter(Boolean).join(" · "));
+    return html;
+  }
+
   // —— CSV downloads and the printed summary ———————————————————————————————————
   function downloadCsv(name, header, rows) {
     const cell = (v) => { const t = v == null ? "" : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
@@ -752,6 +1026,16 @@
       h.rows.filter((r) => r.km <= km).sort((a, b) => b.ms - a.ms).map((r) => [isoMin(r.ms), kind[r.type], r.mag, r.lat, r.lon, miles(r.km), r.src === "S" ? "SPC preliminary" : "NCEI Storm Events"]));
   }
 
+  function csvWarnings() {
+    downloadCsv(`${fileStem()}-nws-warnings.csv`, ["product", "office", "issued_utc", "expires_utc", "in_effect_at_event_time", "storm_based", "tags", "link"],
+      state.warnings.list.map((w) => [w.name, w.wfo, isoMin(w.issueMs), isoMin(w.expireMs), activeAt(w, Date.parse(state.query.isoUtc)) ? "yes" : "no", w.storm ? "yes" : "no", warningTags(w).join("; "), IEM + w.url]));
+  }
+  function csvLightning() {
+    const q = state.query;
+    downloadCsv(`${fileStem()}-lightning.csv`, ["time_utc", "lat", "lon", "distance_mi", "direction_from_place", "satellite"],
+      state.lightning.flashes.map((f) => [new Date(f.t).toISOString(), f.lat.toFixed(4), f.lon.toFixed(4), miles(f.km), bearing(q.lat, q.lon, f.lat, f.lon), state.lightning.satellite]));
+  }
+
   async function printSummary() {
     const q = state.query;
     if (!q) return;
@@ -771,6 +1055,10 @@
       ${near.length ? `<table><thead><tr><th>Time (UTC)</th><th>Type</th><th>Size / speed</th><th>Location</th><th>Distance</th><th>Source</th></tr></thead><tbody>
         ${near.map((r) => `<tr><td>${t(formatDisplayUtc(r.timeUtc))}</td><td>${t(r.label)}</td><td>${t(r.magnitude)}</td><td>${t(r.location)}${r.state ? `, ${t(r.state)}` : ""}</td><td>${miles(r.distanceKm)} mi</td><td>${t(r.source)}</td></tr>`).join("")}</tbody></table>`
         : "<p>No storm reports within 10 miles.</p>"}
+      ${state.warnings?.list ? `<h2>NWS warnings, watches and advisories at the location (${state.warnings.list.length})</h2>
+      ${state.warnings.list.length ? `<table><thead><tr><th>Product</th><th>Office</th><th>Issued to expired (UTC)</th><th>At event time</th><th>Issued with</th></tr></thead><tbody>
+        ${state.warnings.list.map((w) => `<tr><td>${t(w.name)}</td><td>${t(w.wfo)}</td><td>${t(formatDisplayUtc(isoMin(w.issueMs)))} to ${t(formatDisplayUtc(isoMin(w.expireMs)))}</td><td>${activeAt(w, ev) ? "<b>In effect</b>" : ""}</td><td>${t(warningTags(w).join(", "))}</td></tr>`).join("")}</tbody></table>`
+        : "<p>None during the period.</p>"}` : ""}
       <h2>Nearest station observations</h2>
       ${state.stations.map((s) => {
         const rows = s.obs.filter((o) => Math.abs(o.t - ev) <= 3 * 3600e3);
@@ -782,6 +1070,8 @@
       <h2>Sources and limits</h2>
       <p class="meta">Radar, hail size, rotation and rain: NOAA MRMS (noaa-mrms-pds on AWS). Storm reports: NOAA SPC (preliminary) and NCEI Storm Events Database (official).
         Observations: NOAA NCEI Integrated Surface Database and the National Weather Service. Hail sizes from MRMS are radar estimates (MESH), not measurements.
+        Warnings: NWS products as archived by the Iowa Environmental Mesonet. Lightning: NOAA GOES Geostationary Lightning Mapper, located to about 3–6 miles.
+        Climate normals and records: NOAA Regional Climate Centers (ACIS).
         This summary is not a certified weather analysis. For a certified report, contact Standard Weather Forensics &amp; Consulting at standardweather.github.io.</p>`;
     // Size the map to the page, frame the place and nearby reports, give the tiles a moment, then print.
     document.body.classList.add("printing");
@@ -798,7 +1088,8 @@
   }
 
   function render() {
-    $("panel").innerHTML = state.view === "reports" ? reportsView() : state.view === "obs" ? obsView() : state.view === "history" ? historyView() : summaryView();
+    const views = { reports: reportsView, obs: obsView, warnings: warningsView, lightning: lightningView, history: historyView };
+    $("panel").innerHTML = (views[state.view] || summaryView)();
   }
   function setView(v) {
     state.view = v;
@@ -813,6 +1104,10 @@
     if (action === "csv-reports") return csvReports();
     if (action === "csv-obs") return csvObs();
     if (action === "csv-history") return csvHistory();
+    if (action === "csv-warnings") return csvWarnings();
+    if (action === "csv-lightning") return csvLightning();
+    const win = e.target.closest("[data-lightning]")?.dataset.lightning;
+    if (win && state.query && !state.lightning?.loading) { layers.lightning.clearLayers(); loadLightning(state.query, +win); return; }
     if (action === "radar-hail") return checkRadarHail();
     const radius = e.target.closest("[data-radius]")?.dataset.radius;
     if (radius && state.history) { state.history.radiusMi = +radius; render(); return; }
@@ -900,7 +1195,8 @@
     state.query = q;
     state.radarIso = q.isoUtc;
     state.reports = []; state.stations = []; state.hail = state.rotation = state.rain = null; state.selectedReport = null; state.obsNote = null;
-    ["hail", "rotation", "rain", "reports", "stations"].forEach((k) => layers[k].clearLayers());
+    state.warnings = { loading: true }; state.lightning = null; state.climate = { loading: true };
+    ["hail", "rotation", "rain", "warnings", "lightning", "reports", "stations"].forEach((k) => layers[k].clearLayers());
     rememberPlace(q);
     const params = new URLSearchParams({ loc: $("location").value.trim(), date: q.isoUtc.slice(0, 10), time: q.isoUtc.slice(11, 16).replace(":", "") });
     if (q.endMs) params.set("through", isoMin(q.endMs - 86_400_000).slice(0, 10));
@@ -927,6 +1223,19 @@
         drawReports();
         render();
       }),
+      loadWarnings(q).then((w) => w, (e) => ({ error: e.message })).then((w) => {
+        if (state.query !== q) return;
+        state.warnings = w;
+        drawWarnings();
+        drawLegend();
+        render();
+      }),
+      loadClimate(q).then((c) => c, (e) => ({ error: e.message })).then((c) => {
+        if (state.query !== q) return;
+        state.climate = c;
+        if (state.view === "summary") render();
+      }),
+      loadLightning(q, LIGHTNING_WINDOWS[0]),
       loadObservations(q).then(({ stations, note }) => {
         if (state.query !== q) return;
         state.stations = stations;

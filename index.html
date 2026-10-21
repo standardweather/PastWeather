@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>PastWeather | Standard Weather</title>
-  <meta name="description" content="PastWeather — archived NOAA radar, hail and rotation swaths, storm reports and station observations for any place and time since October 2020." />
+  <meta name="description" content="PastWeather — archived NOAA radar, hail and rotation swaths, storm reports, NWS warnings, lightning and station observations for any place and time." />
   <meta name="theme-color" content="#070914" />
   <link rel="canonical" href="https://standardweather.github.io/PastWeather/" />
   <meta property="og:type" content="website" />
@@ -34,8 +34,9 @@
     .report.sel { background: rgba(74, 209, 255, 0.07); box-shadow: inset 3px 0 0 var(--accent); }
     .stat { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem; padding: 0.35rem 0; border-top: 1px solid var(--rule); font-size: 0.82rem; }
     .stat:first-of-type { border-top: 0; }
-    .stat b { font: 500 1rem var(--mono); color: #fff; }
+    .stat b { font: 500 1rem var(--mono); color: #fff; white-space: nowrap; }
     .stat small { display: block; color: var(--text3); font-size: 0.72rem; }
+    #views { flex-wrap: wrap; column-gap: 1.1rem; row-gap: 0; align-content: flex-start; flex: none; }
     .scrub .steps { display: flex; gap: 0.15rem; }
     .scrub .steps button { padding: 0 0.25rem; font: 0.74rem var(--mono); color: var(--text2); }
     .scrub .steps button:hover { color: #fff; }
@@ -107,11 +108,14 @@
         <button role="tab" data-view="summary" aria-selected="true">Summary</button>
         <button role="tab" data-view="reports" aria-selected="false">Reports</button>
         <button role="tab" data-view="obs" aria-selected="false">Observations</button>
+        <button role="tab" data-view="warnings" aria-selected="false">Warnings</button>
+        <button role="tab" data-view="lightning" aria-selected="false">Lightning</button>
         <button role="tab" data-view="history" aria-selected="false">History</button>
       </div>
       <div class="scroll" id="panel">
         <div class="hint">Enter a place and a UTC date and time. PastWeather shows NOAA radar at that moment, the day's
-          <b>hail-size</b> and <b>rotation</b> swaths, storm reports, and measured observations from the nearest stations.
+          <b>hail-size</b> and <b>rotation</b> swaths, storm reports, the <b>NWS warnings</b> in effect, nearby <b>lightning</b>,
+          measured observations from the nearest stations, and how the day compares with <b>normals and records</b>.
           Radar and swaths are available from October 14, 2020.
           <br /><br />Add a <b>through date</b> to total wind and rain over a stretch of days, or leave the date blank to see
           the place's <b>hail, wind and tornado history</b> back to 1950.</div>
@@ -124,10 +128,13 @@
           <label><input type="checkbox" data-layer="hail" /> Hail size (24 h)</label>
           <label><input type="checkbox" data-layer="rotation" /> Rotation (24 h)</label>
           <label><input type="checkbox" data-layer="rain" /> Rain (24 h)</label>
+          <label><input type="checkbox" data-layer="warnings" checked /> NWS warnings</label>
+          <label><input type="checkbox" data-layer="lightning" checked /> Lightning</label>
           <label><input type="checkbox" data-layer="stations" checked /> Stations</label>
         </div>
         <p class="disclaimer">Radar, hail, rotation and rain: NOAA MRMS. Reports: NOAA SPC (preliminary) and NCEI Storm Events (official).
-          Observations: NCEI and the NWS. Not a substitute for a certified weather analysis.</p>
+          Observations: NCEI and the NWS. Warnings: NWS, archived by the Iowa Environmental Mesonet. Lightning: NOAA GOES GLM.
+          Normals and records: NOAA ACIS. Not a substitute for a certified weather analysis.</p>
       </div>
     </aside>
 
@@ -151,6 +158,7 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/js/mrms.js?v=2"></script>
-  <script src="app.js?v=3"></script>
+  <script src="glm.js?v=1"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>
