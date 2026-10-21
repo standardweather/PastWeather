@@ -50,6 +50,8 @@
     .actions .cta:hover { text-decoration: none; filter: brightness(1.1); }
     table.t tr.go { cursor: pointer; }
     table.t tr.go:hover { background: rgba(255, 255, 255, 0.04); }
+    .verdict { margin: 0.5rem 0 0.4rem; padding: 0.1rem 0.7rem 0.5rem; border-left: 3px solid var(--accent); background: rgba(74, 209, 255, 0.05); }
+    .verdict .note b { color: #fff; }
     #printout { display: none; }
     /* Print summary: the map, then the summary, reports and observations on white. */
     body.printing .stage { width: 7.2in; height: 4.4in; flex: none; }
@@ -111,6 +113,8 @@
         <button role="tab" data-view="warnings" aria-selected="false">Warnings</button>
         <button role="tab" data-view="lightning" aria-selected="false">Lightning</button>
         <button role="tab" data-view="history" aria-selected="false">History</button>
+        <button role="tab" data-view="dol" aria-selected="false">Date of loss</button>
+        <button role="tab" data-view="winter" aria-selected="false">Ice &amp; snow</button>
       </div>
       <div class="scroll" id="panel">
         <div class="hint">Enter a place and a UTC date and time. PastWeather shows NOAA radar at that moment, the day's
@@ -118,7 +122,9 @@
           measured observations from the nearest stations, and how the day compares with <b>normals and records</b>.
           Radar and swaths are available from October 14, 2020.
           <br /><br />Add a <b>through date</b> to total wind and rain over a stretch of days, or leave the date blank to see
-          the place's <b>hail, wind and tornado history</b> back to 1950.</div>
+          the place's <b>hail, wind and tornado history</b> back to 1950.
+          <br /><br /><b>Date of loss</b> compares a claimed date with the days around it, and <b>Ice &amp; snow</b> shows freezing
+          temperatures, freezing rain and snow before the time.</div>
       </div>
       <div class="side__foot">
         <h4>Map layers</h4>
@@ -159,6 +165,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/js/mrms.js?v=2"></script>
   <script src="glm.js?v=1"></script>
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>
