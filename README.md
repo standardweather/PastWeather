@@ -15,6 +15,8 @@ Client-side web app: look up **archived NOAA MRMS radar** and **NOAA storm repor
 - **Warnings**: the NWS warnings, watches and advisories that covered the place during the day, and which were in effect at the event time. Storm-based warnings count only when their polygon covered the place, and the polygons are drawn on the map
 - **Lightning**: GOES lightning flashes within 25 mi, ±15 minutes to ±1 hour around the event time (2018 onward), with the closest distance and direction. `glm.js` reads only the flash arrays from each GLM file with HTTP range requests
 - **Climate context**: the day's high, low, precipitation and snowfall at the nearest climate station with 30+ years of records, against 1991–2020 normals, with its rank for that date (or period) when it's in the top 10
+- **Date of loss**: every SPC day within ±7 to ±90 days of a claimed date, ranked by MRMS estimated hail at the address, hail, wind and tornado reports within 10 mi, and the nearest airport's daily peak gust (NCEI daily summaries), with a chart, CSV and print section
+- **Ice & snow**: the 48 hours before the event at the nearest hourly station (hours at or below freezing, thaw and refreeze, freezing rain, sleet and snow from present-weather codes, liquid that fell below freezing), winter alerts in effect, and daily snowfall and snow depth from nearby observers (NOAA ACIS)
 - **Print summary** (one page per event, with the map) and **CSV downloads** of reports, observations and history
 - **Request a certified report** fills in the contact form on the home page with the event
 - Soft handoff to [Standard Weather](https://standardweather.github.io/)

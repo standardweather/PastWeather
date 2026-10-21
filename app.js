@@ -10,7 +10,9 @@
  *   data/history (tools/hail_history.py)    hail, wind and tornado reports since 1950 for the History view
  *   Iowa Environmental Mesonet       archive of NWS warnings, watches and advisories (storm-based polygons by point)
  *   NOAA GOES GLM (noaa-goes16/17/18/19)   lightning flashes, read with range requests by glm.js
- *   NOAA ACIS (data.rcc-acis.org)    daily climate records and 1991–2020 normals at the nearest long-record station
+ *   NOAA ACIS (data.rcc-acis.org)    daily climate records and 1991–2020 normals at the nearest long-record station;
+ *                                    daily snowfall and snow depth for the Ice & snow view
+ *   NCEI daily summaries (GHCN-D)    fastest 5-second gust by day at the nearest airport, for the Date of loss view
  * A search is kept in the URL (?loc=…&date=…&time=…&through=…) so a view can be shared. The last place searched is
  * remembered (localStorage "sw-place") so the other Standard Weather pages can offer it.
  */
@@ -45,6 +47,8 @@
     warnings: null,       // NWS warnings, watches and advisories that covered the place: { list, shapes } | { loading } | { error }
     lightning: null,      // GOES lightning flashes near the place around the event time (see loadLightning)
     climate: null,        // normals and records at the nearest long-record climate station (see loadClimate)
+    dol: null,            // date-of-loss check around the claimed date (see loadDol)
+    winter: null,         // ice and snow conditions before the event (see loadWinter)
     radarInfo: null, loadToken: 0,
     on: { radar: true, reports: true, hail: false, rotation: false, rain: false, warnings: true, lightning: true, stations: true },
   };
@@ -342,6 +346,8 @@
       vis: num(vis[0], 999999) == null ? null : Number(vis[0]) / 1609.34,
       precip1h: precipMm == null ? null : precipMm / 10 / 25.4,
       wx: r.MW1 ? r.MW1.split(",")[0] : "",
+      mw: ["MW1", "MW2", "MW3"].map((k) => r[k] && Number(r[k].split(",")[0])).filter(Number.isFinite),
+      aw: ["AW1", "AW2", "AW3", "AW4"].map((k) => r[k] && Number(r[k].split(",")[0])).filter(Number.isFinite),
     };
   }
 
@@ -994,6 +1000,289 @@
     return html;
   }
 
+  // —— Date of loss: which day near a claimed date had hail or damaging wind at the place ——————————————
+  // For every SPC day in a window around the claimed date: MRMS estimated hail at the spot (24-hour maximum,
+  // since October 2020), hail, wind and tornado reports within 10 miles (the History tiles), and the day's
+  // fastest 5-second gust at the nearest airport (NCEI Global Historical Climatology Network daily summaries).
+  const DOL_SPANS = [7, 30, 60, 90];
+  const DOL_REPORT_KM = 16.09;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  async function nearestGustStation(lat, lon, startDay, endDay) {
+    for (const d of [0.6, 1.2]) {
+      const u = `${NCEI}/search/v1/data?dataset=daily-summaries&dataTypes=WSF5&startDate=${startDay}T00:00:00&endDate=${endDay}T23:59:59` +
+        `&bbox=${(lat + d).toFixed(3)},${(lon - d * 1.3).toFixed(3)},${(lat - d).toFixed(3)},${(lon + d * 1.3).toFixed(3)}&limit=50`;
+      const json = await getJson(u).catch(() => null);
+      const found = (json?.results || []).map((r) => {
+        const s = (r.stations || [])[0], c = r.location?.coordinates;
+        return s?.id && Array.isArray(c) ? { id: s.id, name: s.name.replace(/,\s*[A-Z]{2}\s+US$/, ""), lat: c[1], lon: c[0], km: distanceKm(lat, lon, c[1], c[0]) } : null;
+      }).filter(Boolean).sort((a, b) => a.km - b.km);
+      if (found.length) return found[0];
+    }
+    return null;
+  }
+
+  async function loadDol(q, span) {
+    const claimed = spcDayStart(q.isoUtc);
+    const key = `${q.lat.toFixed(4)},${q.lon.toFixed(4)},${claimed},${span}`;
+    if (state.dol?.key === key) return;
+    const dol = state.dol = { key, span, claimed, status: "loading", days: [], station: null, radarLeft: 0 };
+    for (let k = -span; k <= span; k++) {
+      const start = claimed + k * 86_400_000;
+      if (start > Date.now()) break;
+      dol.days.push({ start, hailAt: undefined, hailNear: undefined, hail: null, wind: null, tor: [], gust: null });
+    }
+    render();
+    // Reports within 10 miles, from the History tiles (hail 1"+, wind 58 mph+, tornadoes).
+    loadHistory(q);
+    while (state.history?.status === "loading") await sleep(150);
+    if (state.dol !== dol) return;
+    const byDay = new Map(dol.days.map((d) => [d.start, d]));
+    for (const r of state.history?.rows || []) {
+      const d = r.km <= DOL_REPORT_KM && byDay.get(convDay(r.ms));
+      if (!d) continue;
+      if (r.type === "H" && (!d.hail || r.mag > d.hail.mag)) d.hail = r;
+      if (r.type === "W" && (!d.wind || r.mag > d.wind.mag)) d.wind = r;
+      if (r.type === "T") d.tor.push(r);
+    }
+    dol.status = "ready";
+    render();
+    // Peak gusts by local day at the nearest airport.
+    const first = ymd(dol.days[0].start), last = ymd(dol.days[dol.days.length - 1].start);
+    (async () => {
+      const st = await nearestGustStation(q.lat, q.lon, first, last);
+      if (!st || state.dol !== dol) return;
+      const rows = await getJson(`${NCEI}/data/v1?dataset=daily-summaries&stations=${st.id}&startDate=${first}&endDate=${last}&dataTypes=WSF5,WSF2,WDF5&format=json&units=standard`).catch(() => null);
+      if (state.dol !== dol) return;
+      dol.station = st;
+      for (const r of rows || []) {
+        const d = byDay.get(Date.parse(`${r.DATE}T12:00:00Z`));
+        const g = parseFloat(r.WSF5);
+        if (d && Number.isFinite(g)) d.gust = { g, dir: parseFloat(r.WDF5), sustained: parseFloat(r.WSF2) };
+      }
+      if (state.view === "dol") render();
+    })();
+    // MRMS hail at the spot, claimed date first and then outward, a few at a time.
+    const queue = dol.days.filter((d) => d.start + 86_400_000 >= MRMS.archiveStart.getTime())
+      .sort((a, b) => Math.abs(a.start - claimed) - Math.abs(b.start - claimed));
+    dol.days.forEach((d) => { if (!queue.includes(d)) d.hailAt = d.hailNear = null; });
+    dol.radarLeft = queue.length;
+    let lastDraw = 0;
+    const worker = async () => {
+      for (let d; (d = queue.shift());) {
+        const end = Math.min(d.start + 86_400_000, Date.now() - 15 * 60e3);
+        const f = await MRMS.fetchProduct("hail", isoMin(end), q.lat, q.lon, { halfLat: 0.15, mode: "atOrBefore", maxMinutes: 240 }).catch(() => null);
+        if (state.dol !== dol) return;
+        d.hailAt = f ? hailIn(f.at) || 0 : null;
+        d.hailNear = f ? hailIn(f.peak) || 0 : null;
+        dol.radarLeft--;
+        if (state.view === "dol" && (Date.now() - lastDraw > 600 || !dol.radarLeft)) { lastDraw = Date.now(); render(); }
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+  }
+
+  const dolSignal = (d) => (d.hailAt || 0) > 0 || (d.hailNear || 0) > 0 || d.hail || d.wind || d.tor.length || (d.gust && d.gust.g >= 50);
+  const dolScore = (d) => [d.hailAt || 0, d.hailNear || 0, d.hail?.mag || 0, d.tor.length, d.wind?.mag || 0, d.gust?.g || 0];
+  const dolCompare = (a, b) => { const x = dolScore(a), y = dolScore(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; };
+  const dayShort = (ms) => new Date(ms).toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric", year: "numeric" });
+  const inches = (v) => `${v.toFixed(2)}"`;
+
+  function dolChart(dol) {
+    const days = dol.days, n = days.length;
+    const W = 336, H = 120, L0 = 26, R0 = 4, T0 = 8, B0 = 18;
+    const max = Math.max(1, ...days.map((d) => Math.max(d.hailAt || 0, d.hailNear || 0, d.hail?.mag || 0)));
+    const hi = Math.ceil(max * 2) / 2;
+    const bw = (W - L0 - R0) / n, x = (i) => L0 + i * bw, y = (v) => T0 + (1 - v / hi) * (H - T0 - B0);
+    const mono = 'font-family="IBM Plex Mono, monospace" font-size="9" fill="rgba(255,255,255,.42)"';
+    let svg = "";
+    for (let v = 0; v <= hi; v += hi > 2 ? 1 : 0.5) svg += `<line x1="${L0}" x2="${W - R0}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(255,255,255,.07)"/><text x="${L0 - 4}" y="${y(v) + 3}" text-anchor="end" ${mono}>${v}"</text>`;
+    days.forEach((d, i) => {
+      if (d.start === dol.claimed) svg += `<rect x="${x(i).toFixed(1)}" y="${T0}" width="${Math.max(1, bw).toFixed(1)}" height="${H - T0 - B0}" fill="rgba(74,209,255,.16)"/>`;
+      if (d.hailNear > 0) svg += `<rect x="${(x(i) + bw * 0.1).toFixed(1)}" y="${y(d.hailNear).toFixed(1)}" width="${(bw * 0.8).toFixed(2)}" height="${(H - B0 - y(d.hailNear)).toFixed(1)}" fill="rgba(48,209,88,.28)"/>`;
+      if (d.hailAt > 0) svg += `<rect x="${(x(i) + bw * 0.1).toFixed(1)}" y="${y(d.hailAt).toFixed(1)}" width="${(bw * 0.8).toFixed(2)}" height="${(H - B0 - y(d.hailAt)).toFixed(1)}" fill="#30d158"/>`;
+      if (d.hail) svg += `<circle cx="${(x(i) + bw / 2).toFixed(1)}" cy="${y(d.hail.mag).toFixed(1)}" r="2.6" fill="#fff"/>`;
+      if (d.wind || d.tor.length) svg += `<path d="M${(x(i) + bw / 2).toFixed(1)},${H - B0 - 1} l-3,-5 h6 z" fill="${d.tor.length ? "#ff453a" : "#0a84ff"}"/>`;
+    });
+    const ticks = 5;
+    for (let k = 0; k <= ticks; k++) {
+      const i = Math.min(n - 1, Math.round((k / ticks) * (n - 1)));
+      const dt = new Date(days[i].start);
+      svg += `<text x="${(x(i) + bw / 2).toFixed(1)}" y="${H - 4}" text-anchor="middle" ${mono}>${dt.getUTCMonth() + 1}/${dt.getUTCDate()}</text>`;
+    }
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Hail by day around the claimed date">${svg}</svg>
+      <p class="chart-key"><span style="color:#30d158">▮</span> radar hail at the place <span style="color:rgba(48,209,88,.6)">▮</span> within 6 mi <span style="color:#fff">●</span> hail report within 10 mi
+        <span style="color:#0a84ff">▲</span> wind <span style="color:#ff453a">▲</span> tornado report <span style="color:#4ad1ff">▮</span> claimed date</p>`;
+  }
+
+  function dolView() {
+    const q = state.query;
+    if (!q) return `<p class="empty">Enter a location and the claimed date (and any time), press “Show past weather”, then open this tab to compare the claimed date with the days around it.</p>`;
+    const dol = state.dol;
+    const span = dol?.span || 30;
+    let html = `<div class="pad"><h5 class="sub">${esc(q.label)} · claimed ${esc(dayShort(spcDayStart(q.isoUtc)))}</h5>
+      <p class="note" style="margin-top:0">Ranks every day around the claimed date by radar-estimated hail at this spot, nearby hail, wind and tornado reports, and the nearest airport's peak gust.</p>
+      <div class="satpick" role="group" aria-label="Window"><span>Days either side</span>${DOL_SPANS.map((s) => `<button type="button" data-dolspan="${s}" aria-pressed="${s === span}">±${s}</button>`).join("")}</div>`;
+    if (!dol || dol.status === "loading") return html + `<p class="note">Loading reports…</p></div>`;
+    const c = dol.days.find((d) => d.start === dol.claimed);
+    const radarDone = dol.radarLeft === 0;
+    const withRadar = dol.days.filter((d) => d.hailAt != null && d.hailAt !== undefined);
+    const best = withRadar.slice().sort((a, b) => b.hailAt - a.hailAt || b.hailNear - a.hailNear)[0];
+    const away = (d) => { const k = Math.round((d.start - dol.claimed) / 86_400_000); return k === 0 ? "the claimed date" : `${Math.abs(k)} day${Math.abs(k) === 1 ? "" : "s"} ${k < 0 ? "before" : "after"}`; };
+    // What the claimed date shows, then the strongest alternatives.
+    const lines = [];
+    if (c) {
+      if (c.hailAt === undefined) lines.push("Checking radar hail on the claimed date…");
+      else if (c.hailAt === null) lines.push(c.start + 86_400_000 < MRMS.archiveStart.getTime() ? "Radar hail estimates start October 14, 2020." : "No radar hail file for the claimed date.");
+      else if (c.hailAt > 0) lines.push(`Radar estimates <b>${inches(c.hailAt)}</b> hail at the place on the claimed date${c.hailNear > c.hailAt ? ` (${inches(c.hailNear)} within 6 mi)` : ""}.`);
+      else lines.push(`<b>No hail</b> was estimated at the place on the claimed date${c.hailNear > 0 ? `; the largest within 6 mi was ${inches(c.hailNear)}` : " or within 6 mi"}.`);
+      const rep = [c.hail ? `a ${c.hail.mag}" hail report ${miles(c.hail.km)} mi away` : "", c.wind ? `a ${c.wind.mag} mph wind report ${miles(c.wind.km)} mi away` : "", c.tor.length ? `a tornado report ${miles(c.tor[0].km)} mi away` : ""].filter(Boolean);
+      lines.push(rep.length ? `Reports that day: ${rep.join(", ")}.` : `No hail (1"+), wind (58 mph+) or tornado reports within 10 mi that day.`);
+      if (c.gust) lines.push(`Peak gust at ${esc(dol.station.name)}: ${Math.round(c.gust.g)} mph.`);
+    }
+    if (best && best.hailAt > 0 && best !== c && (!c || best.hailAt > (c.hailAt || 0))) lines.push(`Largest radar hail at the place in the window${radarDone ? "" : " so far"}: <b>${inches(best.hailAt)}</b> on ${esc(dayShort(best.start))}, ${away(best)}.`);
+    html += `<div class="verdict">${lines.map((l) => `<p class="note">${l}</p>`).join("")}</div>`;
+    html += dolChart(dol);
+    if (!radarDone) html += `<p class="note">Checking radar hail: ${withRadar.length} of ${withRadar.length + dol.radarLeft} days done…</p>`;
+    html += `<div class="actions"><button type="button" data-action="csv-dol">Download CSV</button></div></div>`;
+    const ranked = dol.days.filter(dolSignal).sort(dolCompare);
+    html += ranked.length ? `<div class="pad" style="padding-top:0"><h5 class="sub">Days with hail or wind, strongest first</h5><table class="t"><thead><tr><th>Day</th><th>Radar hail</th><th>Reports ≤ 10 mi</th><th>Gust</th></tr></thead><tbody>
+      ${ranked.slice(0, 40).map((d) => `<tr class="go" data-dolday="${d.start}"${d.start === dol.claimed ? ' style="background:rgba(74,209,255,.08)"' : ""} title="Show this day"><td style="white-space:nowrap">${isoMin(d.start).slice(0, 10)}<small>${esc(away(d))}</small></td>
+        <td>${d.hailAt === undefined ? "…" : d.hailAt == null ? "—" : d.hailAt > 0 ? inches(d.hailAt) : "0"}${d.hailNear > 0 && d.hailNear !== d.hailAt ? `<small>${inches(d.hailNear)} near</small>` : ""}</td>
+        <td>${[d.hail ? `${d.hail.mag}" hail` : "", d.wind ? `${d.wind.mag} mph` : "", d.tor.length ? `tornado ${esc(d.tor[0].mag || "")}` : ""].filter(Boolean).join("<br>")}</td>
+        <td>${d.gust ? Math.round(d.gust.g) : ""}</td></tr>`).join("")}</tbody></table></div>`
+      : `<p class="empty">No hail, wind or tornado signal at or near the place in this window.</p>`;
+    html += `<p class="empty">Radar hail is NOAA MRMS's estimated maximum hail size (MESH) at the spot over each SPC day (1200 to 1200 UTC); “near” is the largest within about 6 miles. MESH often runs larger than hail measured on the ground, so it is best used for timing.
+      Reports: NCEI Storm Events and SPC, hail 1"+, wind 58 mph+ and tornadoes within 10 miles. Gust: fastest 5-second wind for the station's local day from NCEI daily summaries${dol.station ? `, at ${esc(dol.station.name)} (${miles(dol.station.km)} mi)` : ""}.</p>`;
+    return html;
+  }
+
+  function csvDol() {
+    const dol = state.dol;
+    downloadCsv(`${fileStem()}-date-of-loss-${dol.span}d.csv`, ["spc_day_start_utc", "days_from_claimed", "mrms_hail_at_place_in", "mrms_hail_within_6mi_in", "largest_hail_report_in", "hail_report_mi", "strongest_wind_report_mph", "wind_report_mi", "tornado_reports", "peak_gust_mph", "gust_station"],
+      dol.days.map((d) => [isoMin(d.start), Math.round((d.start - dol.claimed) / 86_400_000), d.hailAt == null ? "" : d.hailAt.toFixed(2), d.hailNear == null ? "" : d.hailNear.toFixed(2),
+        d.hail?.mag ?? "", d.hail ? miles(d.hail.km) : "", d.wind?.mag ?? "", d.wind ? miles(d.wind.km) : "", d.tor.length, d.gust ? Math.round(d.gust.g) : "", d.gust ? dol.station.id : ""]));
+  }
+
+  // —— Ice and snow: conditions at the place in the 48 hours before the event (slip-and-fall, roof load) ————————
+  // Hourly temperature and present weather at the nearest station (NCEI ISD, or the NWS for recent days), and daily
+  // snowfall and snow depth at the nearest observers (NOAA ACIS).
+  // Present-weather codes: ISD MW (manual, WMO 4677) and AW (automated, WMO 4680).
+  function precipType(o) {
+    const has = (codes, list) => codes.some((c) => list.includes(c));
+    const mw = o.mw || [], aw = o.aw || [];
+    const text = (o.wx || "").toLowerCase();
+    if (has(mw, [66, 67]) || has(aw, [64, 65, 66]) || /freezing rain/.test(text)) return "Freezing rain";
+    if (has(mw, [56, 57]) || has(aw, [54, 55, 56]) || /freezing drizzle/.test(text)) return "Freezing drizzle";
+    if (has(mw, [79, 87, 88]) || has(aw, [74, 75, 76]) || /ice pellets|sleet/.test(text)) return "Ice pellets";
+    if (has(mw, [68, 69, 83, 84]) || has(aw, [67, 68]) || /rain and snow|snow and rain|wintry mix/.test(text)) return "Rain and snow";
+    if (has(mw, [70, 71, 72, 73, 74, 75, 76, 77, 78, 85, 86]) || has(aw, [70, 71, 72, 73, 77, 78, 85, 86, 87]) || /snow/.test(text)) return "Snow";
+    if (has(mw, [60, 61, 62, 63, 64, 65, 80, 81, 82]) || has(aw, [60, 61, 62, 63, 80, 81, 82, 83, 84]) || /rain|shower/.test(text)) return "Rain";
+    if (has(mw, [50, 51, 52, 53, 54, 55, 58, 59]) || has(aw, [50, 51, 52, 53, 57, 58]) || /drizzle/.test(text)) return "Drizzle";
+    return null;
+  }
+  const FROZEN = new Set(["Freezing rain", "Freezing drizzle", "Ice pellets", "Snow", "Rain and snow"]);
+
+  async function loadWinter(q) {
+    const t = Date.parse(q.isoUtc);
+    const start = t - 48 * 3600e3, end = Math.min(t + 6 * 3600e3, Date.now());
+    const startIso = isoMin(start).replace("Z", ""), endIso = isoMin(end).replace("Z", "");
+    let station = null;
+    try {
+      const found = await nceiStations(q.lat, q.lon, startIso, endIso);
+      found.forEach((s) => { s.km = s.lat != null ? distanceKm(q.lat, q.lon, s.lat, s.lon) : 999; });
+      found.sort((a, b) => a.km - b.km);
+      const pick = found.slice(0, 4);
+      if (pick.length) {
+        const rows = await nceiObservations(pick.map((s) => s.id), startIso, endIso);
+        const by = {};
+        for (const r of rows) (by[r.STATION] ||= []).push(r);
+        const s = pick.find((x) => by[x.id]?.some((r) => r.TMP && !r.TMP.startsWith("+9999")));
+        if (s) station = { id: s.id, name: (s.name || s.id).replace(/,\s*[A-Z]{2}\s+US$/, ""), km: s.km, source: "NCEI", obs: by[s.id].map(parseIsd).filter((o) => o.temp != null).sort((a, b) => a.t - b.t) };
+      }
+    } catch { /* try the NWS */ }
+    if (!station && Date.now() - start < 7 * 86_400_000) {
+      const list = await nwsObservations(q.lat, q.lon, isoMin(start), isoMin(end)).catch(() => []);
+      const s = list.find((x) => x.obs.some((o) => o.temp != null));
+      if (s) station = { ...s, km: distanceKm(q.lat, q.lon, s.lat, s.lon), obs: s.obs.filter((o) => o.temp != null) };
+    }
+    // Daily snow at the nearest observers that report it, for the week ending the event's local day.
+    const localDay = ymd(t + (q.lon / 15) * 3600e3);
+    const weekStart = ymd(Date.parse(localDay) - 6 * 86_400_000);
+    let snow = [];
+    try {
+      const d = await acis("MultiStnData", { bbox: [q.lon - 0.5, q.lat - 0.4, q.lon + 0.5, q.lat + 0.4].map((v) => +v.toFixed(3)).join(","),
+        sdate: weekStart, edate: ymd(Date.parse(localDay) + 86_400_000), elems: "maxt,mint,pcpn,snow,snwd", meta: "name,ll" });
+      // The nearest observers with the most complete snowfall and depth records that week.
+      snow = (d.data || []).filter((s) => s.meta?.ll).map((s) => {
+        const rows = s.data.map(([hi, lo, p, sn, sd], i) => ({ day: ymd(Date.parse(weekStart) + i * 86_400_000), hi: acisNum(hi), lo: acisNum(lo), pcpn: acisNum(p), snow: acisNum(sn), depth: acisNum(sd) }));
+        return { name: s.meta.name, km: distanceKm(q.lat, q.lon, s.meta.ll[1], s.meta.ll[0]), rows, n: rows.filter((r) => r.snow != null).length + rows.filter((r) => r.depth != null).length };
+      }).filter((s) => s.n >= 6).sort((a, b) => b.n - a.n || a.km - b.km).slice(0, 6).sort((a, b) => a.km - b.km).slice(0, 2);
+    } catch { /* no snow observers */ }
+    return { t, station, snow, localDay };
+  }
+
+  function winterFacts(w) {
+    const s = w.station;
+    // Hourly amounts come from the routine (FM-15) reports; specials repeat part of the same hour.
+    const liq = (o) => (o.precip1h && (o.type === "FM-15" || o.type === "NWS") ? o.precip1h : 0);
+    if (!s?.obs.length) return null;
+    const before = s.obs.filter((o) => o.t <= w.t);
+    const at = s.obs.reduce((m, o) => (!m || Math.abs(o.t - w.t) < Math.abs(m.t - w.t) ? o : m), null);
+    const day = before.filter((o) => o.t >= w.t - 24 * 3600e3);
+    const lastAbove = before.slice().reverse().find((o) => o.temp > 32.5);
+    const firstBelow = lastAbove ? before.find((o) => o.t > lastAbove.t && o.temp <= 32.5) : before[0]?.temp <= 32.5 ? before[0] : null;
+    const precip = s.obs.filter((o) => o.t <= w.t).map((o) => ({ ...o, ptype: precipType(o) })).filter((o) => o.ptype);
+    const spans = [];
+    for (const o of precip) {
+      const last = spans[spans.length - 1];
+      if (last && last.type === o.ptype && o.t - last.end <= 3 * 3600e3) { last.end = o.t; last.liquid += liq(o); }
+      else spans.push({ type: o.ptype, start: o.t, end: o.t, liquid: liq(o) });
+    }
+    const frozenLiquid = before.filter((o) => o.temp <= 32.5).reduce((sum, o) => sum + liq(o), 0);
+    return {
+      at, hoursBelow: day.length ? Math.round(day.filter((o) => o.temp <= 32.5).length * 24 / Math.max(24, day.length)) : null,
+      minT: day.length ? Math.min(...day.map((o) => o.temp)) : null, maxT: day.length ? Math.max(...day.map((o) => o.temp)) : null,
+      lastAbove, firstBelow, spans, frozenLiquid,
+      refreeze: at && at.temp <= 32.5 && day.some((o) => o.temp > 34),
+    };
+  }
+
+  function winterView() {
+    const q = state.query;
+    if (!q) return `<p class="empty">Enter a location, date and time and press “Show past weather” to see ice and snow conditions before that moment.</p>`;
+    const w = state.winter;
+    if (!w || w.loading) return `<p class="empty">Loading temperatures, precipitation type and snow reports…</p>`;
+    if (w.error) return `<p class="empty">Ice and snow conditions couldn't be loaded (${esc(w.error)}).</p>`;
+    const stat = (label, value, small) => `<div class="stat"><span>${label}${small ? `<small>${small}</small>` : ""}</span><b>${value}</b></div>`;
+    const f = winterFacts(w);
+    const when = (ms) => formatDisplayUtc(isoMin(ms)).replace(" UTC", "Z");
+    const dayHhmm = (ms) => `${ordinal(new Date(ms).getUTCDate())} ${hhmmZ(isoMin(ms))}`;
+    let html = `<div class="pad"><h5 class="sub">${esc(q.label)} · before ${esc(formatDisplayUtc(q.isoUtc))}</h5>`;
+    if (f) {
+      html += stat("Temperature at the time", `${Math.round(f.at.temp)}°F`, `${esc(w.station.name)}, ${miles(w.station.km)} mi · ${esc(w.station.source)} ${esc(w.station.id)} · reading at ${hhmmZ(isoMin(f.at.t))}${precipType(f.at) ? ` · ${esc(precipType(f.at))}` : ""}`);
+      html += stat("At or below freezing", f.at.temp <= 32.5 ? (f.firstBelow ? `${Math.round((w.t - f.firstBelow.t) / 3600e3)} h` : "48 h+") : "No",
+        f.at.temp <= 32.5 ? (f.lastAbove ? `Since ${esc(when(f.firstBelow?.t ?? f.lastAbove.t))}; last above freezing ${Math.round(f.lastAbove.temp)}°F at ${esc(when(f.lastAbove.t))}` : "Below freezing for all 48 hours before") : `Above freezing at the time`);
+      if (f.minT != null) html += stat("Prior 24 hours", `${Math.round(f.minT)}° / ${Math.round(f.maxT)}°`, `Low / high · about ${f.hoursBelow} h at or below 32°F${f.refreeze ? " · <b style=\"color:#fff\">thawed above 34°F, then refroze</b> (meltwater can refreeze as ice)" : ""}`);
+      html += stat("Frozen precipitation, 48 h", f.spans.some((s) => FROZEN.has(s.type)) ? "Yes" : "None reported",
+        f.spans.length ? f.spans.slice(-6).map((s) => `${esc(s.type)} ${dayHhmm(s.start)}${s.end > s.start ? `–${dayHhmm(s.end)}` : ""}${s.liquid >= 0.01 ? ` (${s.liquid.toFixed(2)}" liquid)` : ""}`).join(" · ") : "No precipitation reported at the station");
+      if (f.frozenLiquid >= 0.01) html += stat("Precipitation while ≤ 32°F", `${f.frozenLiquid.toFixed(2)}"`, "Liquid equivalent that fell at or below freezing in the 48 hours");
+    } else html += stat("Hourly observations", "—", "No station with hourly temperatures found within about 40 miles");
+    // Winter alerts in effect at the time, from the Warnings tab's data.
+    const winterAlerts = (state.warnings?.list || []).filter((x) => /Winter|Ice|Freez|Snow|Blizzard|Sleet|Wind Chill|Cold/.test(x.name) && activeAt(x, w.t));
+    if (state.warnings?.list) html += stat("Winter alerts at the time", winterAlerts.length ? "Yes" : "None", winterAlerts.length ? winterAlerts.map((x) => `${esc(x.name)} ${esc(warnSpan(x))}`).join(" · ") : "No winter weather alerts in effect at the location");
+    html += `</div>`;
+    for (const s of w.snow) {
+      html += `<div class="pad" style="padding-top:0"><h5 class="sub">${esc(s.name)} · ${miles(s.km)} mi · daily</h5><table class="t"><thead><tr><th>Day</th>${s.rows.some((r) => r.hi != null) ? "<th>High / low</th>" : ""}<th>Precip</th><th>Snow</th><th>Depth</th></tr></thead><tbody>
+        ${s.rows.map((r) => `<tr${r.day === w.localDay ? ' style="background:rgba(74,209,255,.07)"' : ""}><td>${esc(r.day.slice(5))}</td>${s.rows.some((x) => x.hi != null) ? `<td>${r.hi ?? "—"}° / ${r.lo ?? "—"}°</td>` : ""}<td>${r.pcpn == null ? "—" : r.pcpn > 0 && r.pcpn < 0.01 ? "T" : r.pcpn.toFixed(2)}</td><td>${r.snow == null ? "—" : r.snow > 0 && r.snow < 0.1 ? "T" : r.snow.toFixed(1)}</td><td>${r.depth == null ? "—" : r.depth > 0 && r.depth < 1 ? "T" : Math.round(r.depth)}</td></tr>`).join("")}</tbody></table></div>`;
+    }
+    if (!w.snow.length) html += `<p class="empty">No snowfall observers within about 30 miles reported for that week.</p>`;
+    html += `<p class="empty">Hourly readings from NOAA NCEI's Integrated Surface Database (or the NWS for the last week), with precipitation type from the station's present-weather codes.
+      Daily snowfall and snow depth (inches) from cooperative and CoCoRaHS observers via NOAA ACIS; many observe in the morning, so a day's snow may be listed on the next date. The highlighted day is the event's local date.
+      Station conditions can differ from a specific sidewalk, parking lot or roof.</p>`;
+    return html;
+  }
+
   // —— CSV downloads and the printed summary ———————————————————————————————————
   function downloadCsv(name, header, rows) {
     const cell = (v) => { const t = v == null ? "" : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
@@ -1036,6 +1325,27 @@
       state.lightning.flashes.map((f) => [new Date(f.t).toISOString(), f.lat.toFixed(4), f.lon.toFixed(4), miles(f.km), bearing(q.lat, q.lon, f.lat, f.lon), state.lightning.satellite]));
   }
 
+  /** Date-of-loss and ice-and-snow findings, when those views were opened for this event. */
+  function printExtras(t) {
+    let out = "";
+    const panel = document.createElement("div");
+    if (state.dol?.status === "ready" && state.dol.key.startsWith(`${state.query.lat.toFixed(4)},${state.query.lon.toFixed(4)},${spcDayStart(state.query.isoUtc)},`)) {
+      const dol = state.dol;
+      panel.innerHTML = dolView();
+      const ranked = dol.days.filter(dolSignal).sort(dolCompare).slice(0, 12);
+      out += `<h2>Date of loss: ${dol.span} days either side of the claimed date</h2>
+        ${[...panel.querySelectorAll(".verdict p")].map((p) => `<p>${t(p.textContent)}</p>`).join("")}
+        ${ranked.length ? `<table><thead><tr><th>SPC day</th><th>From claimed</th><th>Radar hail at place</th><th>Within 6 mi</th><th>Reports ≤ 10 mi</th><th>Peak gust</th></tr></thead><tbody>
+          ${ranked.map((d) => `<tr><td>${isoMin(d.start).slice(0, 10)}</td><td>${Math.round((d.start - dol.claimed) / 86_400_000)} d</td><td>${d.hailAt == null ? "—" : inches(d.hailAt)}</td><td>${d.hailNear == null ? "—" : inches(d.hailNear)}</td>
+            <td>${t([d.hail ? `${d.hail.mag}" hail` : "", d.wind ? `${d.wind.mag} mph wind` : "", d.tor.length ? "tornado" : ""].filter(Boolean).join(", "))}</td><td>${d.gust ? `${Math.round(d.gust.g)} mph` : ""}</td></tr>`).join("")}</tbody></table>` : ""}`;
+    }
+    if (state.winter && !state.winter.loading && !state.winter.error && state.winter.q === state.query) {
+      panel.innerHTML = winterView();
+      out += `<h2>Ice and snow before the event</h2><table><tbody>${[...panel.querySelectorAll(".stat")].map((el) => `<tr><td>${t(el.querySelector("span").firstChild?.textContent)}</td><td><b>${t(el.querySelector("b").textContent)}</b></td><td>${t(el.querySelector("small")?.textContent)}</td></tr>`).join("")}</tbody></table>`;
+    }
+    return out;
+  }
+
   async function printSummary() {
     const q = state.query;
     if (!q) return;
@@ -1059,6 +1369,7 @@
       ${state.warnings.list.length ? `<table><thead><tr><th>Product</th><th>Office</th><th>Issued to expired (UTC)</th><th>At event time</th><th>Issued with</th></tr></thead><tbody>
         ${state.warnings.list.map((w) => `<tr><td>${t(w.name)}</td><td>${t(w.wfo)}</td><td>${t(formatDisplayUtc(isoMin(w.issueMs)))} to ${t(formatDisplayUtc(isoMin(w.expireMs)))}</td><td>${activeAt(w, ev) ? "<b>In effect</b>" : ""}</td><td>${t(warningTags(w).join(", "))}</td></tr>`).join("")}</tbody></table>`
         : "<p>None during the period.</p>"}` : ""}
+      ${printExtras(t)}
       <h2>Nearest station observations</h2>
       ${state.stations.map((s) => {
         const rows = s.obs.filter((o) => Math.abs(o.t - ev) <= 3 * 3600e3);
@@ -1071,7 +1382,7 @@
       <p class="meta">Radar, hail size, rotation and rain: NOAA MRMS (noaa-mrms-pds on AWS). Storm reports: NOAA SPC (preliminary) and NCEI Storm Events Database (official).
         Observations: NOAA NCEI Integrated Surface Database and the National Weather Service. Hail sizes from MRMS are radar estimates (MESH), not measurements.
         Warnings: NWS products as archived by the Iowa Environmental Mesonet. Lightning: NOAA GOES Geostationary Lightning Mapper, located to about 3–6 miles.
-        Climate normals and records: NOAA Regional Climate Centers (ACIS).
+        Climate normals and records, daily snowfall and snow depth: NOAA Regional Climate Centers (ACIS). Daily peak gusts: NCEI daily summaries (GHCN-Daily).
         This summary is not a certified weather analysis. For a certified report, contact Standard Weather Forensics &amp; Consulting at standardweather.github.io.</p>`;
     // Size the map to the page, frame the place and nearby reports, give the tiles a moment, then print.
     document.body.classList.add("printing");
@@ -1088,14 +1399,25 @@
   }
 
   function render() {
-    const views = { reports: reportsView, obs: obsView, warnings: warningsView, lightning: lightningView, history: historyView };
+    const views = { reports: reportsView, obs: obsView, warnings: warningsView, lightning: lightningView, history: historyView, dol: dolView, winter: winterView };
     $("panel").innerHTML = (views[state.view] || summaryView)();
   }
   function setView(v) {
     state.view = v;
     document.querySelectorAll("#views button").forEach((b) => b.setAttribute("aria-selected", b.dataset.view === v));
     if (v === "history" && (state.place || state.query)) loadHistory(state.place || state.query);
+    if (v === "dol" && state.query) loadDol(state.query, state.dol?.span || 30);
+    if (v === "winter" && state.query) startWinter(state.query);
     render();
+  }
+  function startWinter(q) {
+    if (state.winter && state.winter.q === q) return;
+    const w = state.winter = { q, loading: true };
+    loadWinter(q).then((r) => r, (e) => ({ error: e.message })).then((r) => {
+      if (state.winter !== w) return;
+      state.winter = { q, ...r };
+      if (state.view === "winter") render();
+    });
   }
   $("views").addEventListener("click", (e) => { const v = e.target.closest("[data-view]")?.dataset.view; if (v) setView(v); });
   $("panel").addEventListener("click", (e) => {
@@ -1109,6 +1431,20 @@
     const win = e.target.closest("[data-lightning]")?.dataset.lightning;
     if (win && state.query && !state.lightning?.loading) { layers.lightning.clearLayers(); loadLightning(state.query, +win); return; }
     if (action === "radar-hail") return checkRadarHail();
+    if (action === "csv-dol") return csvDol();
+    const span = e.target.closest("[data-dolspan]")?.dataset.dolspan;
+    if (span && state.query) { loadDol(state.query, +span); return; }
+    const dolDay = e.target.closest("[data-dolday]")?.dataset.dolday;
+    if (dolDay) {
+      // Show that SPC day; keep the claimed time of day when it falls within the day.
+      const t = +dolDay + ((Date.parse(state.query.isoUtc) - spcDayStart(state.query.isoUtc)) % 86_400_000);
+      $("date").value = isoMin(t).slice(0, 10);
+      $("time").value = isoMin(t).slice(11, 16);
+      $("through").value = "";
+      setView("summary");
+      $("query").requestSubmit();
+      return;
+    }
     const radius = e.target.closest("[data-radius]")?.dataset.radius;
     if (radius && state.history) { state.history.radiusMi = +radius; render(); return; }
     const day = e.target.closest("[data-history]")?.dataset.history;
@@ -1195,7 +1531,7 @@
     state.query = q;
     state.radarIso = q.isoUtc;
     state.reports = []; state.stations = []; state.hail = state.rotation = state.rain = null; state.selectedReport = null; state.obsNote = null;
-    state.warnings = { loading: true }; state.lightning = null; state.climate = { loading: true };
+    state.warnings = { loading: true }; state.lightning = null; state.climate = { loading: true }; state.winter = null;
     ["hail", "rotation", "rain", "warnings", "lightning", "reports", "stations"].forEach((k) => layers[k].clearLayers());
     rememberPlace(q);
     const params = new URLSearchParams({ loc: $("location").value.trim(), date: q.isoUtc.slice(0, 10), time: q.isoUtc.slice(11, 16).replace(":", "") });
@@ -1245,6 +1581,8 @@
       }),
     ];
     if (state.view === "history") loadHistory(q);
+    if (state.view === "dol") loadDol(q, state.dol?.span || 30);
+    if (state.view === "winter") startWinter(q);
     await Promise.allSettled(tasks);
     if (state.query === q) { setStatus(""); render(); }
   }
