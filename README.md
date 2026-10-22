@@ -10,6 +10,8 @@ Client-side web app: look up **archived NOAA MRMS radar** and **NOAA storm repor
 - Radar archive starts **October 14, 2020** (start of NOAA's MRMS archive on AWS)
 - Leaflet map (Esri basemap + MRMS decoded in the browser by `mrms.js`)
 - Time step ±5 / 15 / 30 / 60 minutes
+- **Storm replay**: a radar loop around the event time (±30 min, −1 h to +30 min, or −2 h to +1 h) cropped to the map view, with storm reports appearing as they were made, lightning flashes and the warning polygons in effect. **Save video** records the loop (MP4 or WebM, depending on the browser) with a title, local time and credits, for reports and exhibits
+- **Written account**: the findings drafted as paragraphs in local time (radar at the event, the replay's timing of heavy echoes, hail and rotation, warnings in effect with their tags, nearest reports, lightning, measured wind, rain and climate context), with a copy button and a section in the printed summary
 - Optional **through date** (up to 31 days): peak wind, station rain and MRMS radar-and-gauge rain totals over the period
 - **History** (leave the date blank): every day since 1950 with hail ≥ 1", wind ≥ 58 mph or a tornado reported within 1–25 mi, with an optional check of MRMS estimated hail at the spot for days since October 2020
 - **Warnings**: the NWS warnings, watches and advisories that covered the place during the day, and which were in effect at the event time. Storm-based warnings count only when their polygon covered the place, and the polygons are drawn on the map
@@ -49,6 +51,7 @@ Settings → Pages → Source: **Deploy from a branch** → `main` / `/ (root)`.
 | Storm reports (official) | NOAA NCEI Storm Events Database, published about 3–4 months after each month |
 | Warnings | NWS VTEC products, from the Iowa Environmental Mesonet archive (`vtec_events_bypoint`, `sbw_by_point`, `sbw.geojson`) |
 | Lightning | NOAA GOES-16/17/18/19 Geostationary Lightning Mapper (GLM-L2-LCFA) on AWS, 2018 onward |
+| Time zone | NWS API points service (for local times in the written account) |
 | Climate | NOAA Regional Climate Centers' ACIS (`StnMeta`, `StnData`): daily records and 1991–2020 normals |
 
 Times are **UTC**. Not a substitute for a certified weather analysis.
