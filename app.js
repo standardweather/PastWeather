@@ -49,6 +49,10 @@
     climate: null,        // normals and records at the nearest long-record climate station (see loadClimate)
     dol: null,            // date-of-loss check around the claimed date (see loadDol)
     winter: null,         // ice and snow conditions before the event (see loadWinter)
+    replay: null,         // radar loop around the event time (see loadReplay)
+    replayAt: null,       // radar at the place in each replay frame, kept for the written account
+    eventRadar: null,     // the radar frame at the event time (radarInfo follows the time steps)
+    tz: null,             // { q, zone }: the place's time zone from the NWS, for local times in the written account
     radarInfo: null, loadToken: 0,
     on: { radar: true, reports: true, hail: false, rotation: false, rain: false, warnings: true, lightning: true, stations: true },
   };
@@ -565,9 +569,11 @@
     html += range ? `<p class="note">Reports, observations and rain cover every SPC convective day (1200 to 1200 UTC) in the period. Radar, hail and rotation show the event day.</p>`
       : `<p class="note">Day shown: ${esc(formatDisplayUtc(isoMin(spcDayStart(q.isoUtc))))} to 1200 UTC the next day (the SPC convective day).</p>`;
     if (state.reportNote) html += `<p class="note">${esc(state.reportNote)}</p>`;
+    html += accountView();
     html += `<div class="actions">
       <a class="cta" href="${esc(requestUrl())}">Request a certified report</a>
       <button type="button" data-action="print">Print summary</button>
+      <a href="/case.html?${new URLSearchParams({ loc: $("location").value.trim() || `${q.lat.toFixed(4)},${q.lon.toFixed(4)}`, date: q.isoUtc.slice(0, 10), time: q.isoUtc.slice(11, 16).replace(":", "") })}">Build a case file</a>
       <a href="/NowWeather/?loc=${q.lat.toFixed(4)},${q.lon.toFixed(4)}">Weather here now</a>
       <a href="/FutureWeather/?loc=${q.lat.toFixed(3)},${q.lon.toFixed(3)}">Forecast here</a>
     </div>`;
@@ -1283,6 +1289,158 @@
     return html;
   }
 
+  // —— Written account: the findings above as paragraphs to paste into a report ————————————————————
+  /** The place's IANA time zone from the NWS points service (US only), so the account can give local times. */
+  async function loadTimeZone(q) {
+    const pt = await getJson(`https://api.weather.gov/points/${q.lat.toFixed(4)},${q.lon.toFixed(4)}`).catch(() => null);
+    if (state.query !== q) return;
+    state.tz = { q, zone: pt?.properties?.timeZone || null };
+    if (state.view === "summary") render();
+  }
+  const zoneFor = (q) => (state.tz?.q === q ? state.tz.zone : null);
+  /** "4:10 PM CDT"; with "date" "May 21, 4:10 PM CDT"; with "long" "Tuesday, May 21, 2024, at 4:10 PM CDT". UTC when the zone isn't known. */
+  function localTime(ms, style) {
+    const zone = zoneFor(state.query);
+    if (!zone) return style ? formatDisplayUtc(isoMin(ms)) : hhmmZ(ms).replace("Z", " UTC");
+    const time = new Date(ms).toLocaleTimeString("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+    if (!style) return time;
+    const date = new Date(ms).toLocaleDateString("en-US", style === "long" ? { timeZone: zone, weekday: "long", month: "long", day: "numeric", year: "numeric" } : { timeZone: zone, month: "short", day: "numeric" });
+    return style === "long" ? `${date}, at ${time}` : `${date}, ${time}`;
+  }
+  const dbzWords = (z) => (z >= 60 ? "very intense echoes of the kind often produced by hail" : z >= 50 ? "intense echoes consistent with very heavy rain and possibly hail"
+    : z >= 40 ? "echoes consistent with heavy rain" : z >= 30 ? "echoes consistent with moderate rain" : z >= 15 ? "light precipitation" : "only weak echoes");
+  const titleCase = (n) => (n === n.toUpperCase() ? n.toLowerCase().replace(/\b([a-z])/g, (m) => m.toUpperCase()).replace(/\b(Ap|Afb|Faa|Nas|Intl|Rgnl)\b/g, (m) => m.toUpperCase()) : n);
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const an = (n) => `${/^[AEIOU]/i.test(n) ? "an" : "a"} ${n}`;
+  const listWords = (a) => (a.length < 2 ? a.join("") : `${a.slice(0, -1).join(", ")} and ${a[a.length - 1]}`);
+
+  function warningWords(w) {
+    const out = [];
+    if (w.issue_hailtag) out.push(`hail up to ${w.issue_hailtag} inches`);
+    if (w.issue_windtag) out.push(`winds to ${w.issue_windtag} mph`);
+    if (w.issue_tornadotag) out.push(`${an(String(w.issue_tornadotag).toLowerCase().replace("radar indicated", "radar-indicated"))} tornado`);
+    const dmg = w.issue_damagetag || w.issue_tornadodamagetag || w.issue_thunderstormdamagetag;
+    if (dmg) out.push(`a ${String(dmg).toLowerCase()} damage threat`);
+    return out;
+  }
+
+  /** Plain-text paragraphs describing the event from whatever has loaded. */
+  function accountParas() {
+    const q = state.query;
+    const ev = Date.parse(q.isoUtc);
+    const range = isRange(q), word = range ? "period" : "day";
+    const zone = zoneFor(q);
+    const dayOf = (ms) => (zone ? new Date(ms).toLocaleDateString("en-US", { timeZone: zone }) : isoMin(ms).slice(0, 10));
+    const at = (ms) => localTime(ms, dayOf(ms) === dayOf(ev) ? undefined : "date");
+    const where = parseLatLon(q.label) ? `the location at ${q.label}` : `${q.label} (${q.lat.toFixed(4)}, ${q.lon.toFixed(4)})`;
+    const paras = [];
+
+    // Radar, hail and rotation at the place.
+    let p = `This account covers ${where} on ${localTime(ev, "long")}${zone ? ` (${hhmmZ(ev).replace("Z", " UTC")})` : ""}${range ? `, and the period through ${formatDisplayUtc(isoMin(rangeEnd(q)))}` : ""}.`;
+    const er = state.eventRadar?.q === q ? state.eventRadar.frame : null;
+    if (er) {
+      const z = er.at;
+      p += ` NOAA MRMS radar at ${at(Date.parse(er.timeIso))} showed ${z != null && z > 0 ? `${dbzWords(z)} over the location (${Math.round(z)} dBZ)` : "no precipitation over the location"}.`;
+    }
+    const ra = state.replayAt?.q === q ? state.replayAt : null;
+    const seen = ra ? ra.list.filter((f) => f.at != null) : [];
+    if (seen.length >= 3) {
+      const wet = seen.filter((f) => f.at >= 40);
+      const top = seen.reduce((m, f) => (f.at > m.at ? f : m));
+      p += ` In radar frames every ${ra.step} minutes from ${at(seen[0].t)} to ${at(seen[seen.length - 1].t)}, ` + (wet.length
+        ? `echoes of 40 dBZ or more were over the location ${wet.length === 1 ? `only at ${at(wet[0].t)}` : `from ${at(wet[0].t)} to ${at(wet[wet.length - 1].t)}`}, peaking at ${Math.round(top.at)} dBZ at ${at(top.t)}.`
+        : `echoes over the location stayed below 40 dBZ${top.at > 0 ? ` (strongest ${Math.round(top.at)} dBZ at ${at(top.t)})` : ""}.`);
+    }
+    const h = state.hail;
+    if (h) {
+      const hAt = hailIn(h.at), hPk = hailIn(h.peak);
+      const end = localTime(Date.parse(h.timeIso), "date");
+      p += hAt ? ` Radar-estimated hail (MRMS MESH) over the 24 hours ending ${end} was ${hAt.toFixed(2)} inches at the location${hPk && hPk >= hAt + 0.1 ? `, with up to ${hPk.toFixed(2)} inches within about 6 miles` : ""}.`
+        : ` Radar estimated no hail at the location (MRMS MESH) over the 24 hours ending ${end}${hPk ? `, though it estimated up to ${hPk.toFixed(2)} inches within about 6 miles` : ""}.`;
+    }
+    const rot = state.rotation;
+    if (rot?.peak >= 10) p += ` Radar also showed strong rotation within about 6 miles (peak ${Math.round(rot.peak)} ×10⁻³ s⁻¹)${rot.peak >= 15 ? ", a level often seen with tornadic storms" : ""}.`;
+    paras.push(p);
+
+    // Warnings, storm reports and lightning.
+    p = "";
+    const wn = state.warnings;
+    if (wn?.list) {
+      const on = wn.list.filter((x) => activeAt(x, ev));
+      if (on.length) {
+        p += on.map((w) => {
+          const tags = warningWords(w);
+          return ` ${an(w.name).replace(/^a/, "A")} issued by NWS ${w.wfo} at ${at(w.issueMs)} was in effect at the time, until ${at(w.expireMs)}${tags.length ? `, citing ${listWords(tags)}` : ""}.`;
+        }).join("");
+      } else {
+        const names = [...new Set(wn.list.map((w) => w.name))];
+        p += ` No National Weather Service warning, watch or advisory covered the location at that time${names.length ? `, though it was under ${listWords(names.map(an))} at other times during the ${word}` : ""}.`;
+      }
+      const onNames = new Set(on.map((w) => w.name));
+      const others = on.length ? [...new Set(wn.list.filter((w) => !activeAt(w, ev) && !onNames.has(w.name)).map((w) => w.name))] : [];
+      if (others.length) p += ` During the ${word} the location was also under ${listWords(others.map(an))}.`;
+    }
+    const near = (type) => state.reports.filter((r) => r.type === type && r.distanceKm <= 25 / 0.621371).sort((a, b) => a.distanceKm - b.distanceKm)[0];
+    const src = (r) => (r.source.startsWith("NCEI") ? "NCEI Storm Events" : "SPC preliminary report");
+    const noun = { hail: "hail report", wind: "thunderstorm wind report", tornado: "tornado report" };
+    const reportsIn = state.reports.filter((r) => ["hail", "wind", "tornado"].includes(r.type));
+    if (reportsIn.length || !state.reportNote) {
+      const lines = ["hail", "wind", "tornado"].map((type) => {
+        const r = near(type);
+        if (!r) return "";
+        return ` The nearest ${noun[type]}${r.magnitude ? ` (${r.magnitude.replace(/"$/, " in")})` : ""} was at ${r.location}${r.state ? `, ${r.state}` : ""}, about ${miles(r.distanceKm)} miles ${bearing(q.lat, q.lon, r.lat, r.lon)} of the location, at ${at(Date.parse(r.timeUtc))} (${src(r)}).`;
+      }).join("");
+      const n10 = reportsIn.filter((r) => r.distanceKm <= PRINT_RADIUS_KM).length;
+      p += lines ? `${lines} In all, ${n10 ? plural(n10, "hail, wind or tornado report was", "hail, wind or tornado reports were") : "no hail, wind or tornado reports were"} made within 10 miles during the ${word}.`
+        : ` No hail, wind or tornado reports were made within 25 miles during the ${word}.`;
+    }
+    const lt = state.lightning;
+    if (lt?.flashes) {
+      const span = lt.minutes < 60 ? `${lt.minutes} minutes` : "hour";
+      const close = lt.flashes.reduce((m, f) => (!m || f.km < m.km ? f : m), null);
+      const n10 = lt.flashes.filter((f) => f.km <= 10 / 0.621371).length;
+      p += close ? ` GOES satellite lightning data show ${plural(lt.flashes.length, "flash", "flashes")} within 25 miles in the ${span} either side of the time, ${n10} of them within 10 miles; the closest was about ${miles(close.km)} miles ${bearing(q.lat, q.lon, close.lat, close.lon)} at ${at(close.t)}.`
+        : ` GOES satellite lightning data show no flashes within 25 miles in the ${span} either side of the time.`;
+    }
+    if (p.trim()) paras.push(p.trim());
+
+    // Measured wind, rain and climate context.
+    p = "";
+    const s0 = state.stations[0];
+    if (s0?.peak) {
+      const o = s0.obs.filter((x) => x.wspd != null && Math.abs(x.t - ev) <= 3600e3).sort((a, b) => Math.abs(a.t - ev) - Math.abs(b.t - ev))[0];
+      p += ` At ${titleCase(s0.name)}, about ${miles(s0.km)} miles ${bearing(q.lat, q.lon, s0.lat, s0.lon)} of the location, the highest wind recorded during the ${word} was ${Math.round(s0.peak.g)} mph at ${at(s0.peak.t)}${s0.precip != null && s0.precip >= 0.01 ? `, and ${s0.precip.toFixed(2)} inches of rain was measured` : ""}.`;
+      if (o) p += ` Its report at ${at(o.t)} showed ${o.wspd < 1 ? "calm wind" : `wind${o.wdir != null ? ` from the ${COMPASS[Math.round(o.wdir / 45) % 8]}` : ""} at ${Math.round(o.wspd)} mph${o.gust ? `, gusting to ${Math.round(o.gust)} mph` : ""}`}${o.temp != null ? ` and a temperature of ${Math.round(o.temp)}°F` : ""}.`;
+    }
+    if (state.rain?.total != null && state.rain.total >= 0.254) p += ` MRMS radar-and-gauge analysis puts rainfall at the location at ${(state.rain.total / 25.4).toFixed(2)} inches for the ${word}.`;
+    const c = state.climate;
+    if (c && !c.loading && !c.error && !c.none) {
+      const rk = c.pcpn >= 0.01 && c.rankPcpn && c.rankPcpn.r <= 10 ? (c.rankPcpn.r === 1 ? `, the most on record for the date in ${c.rankPcpn.n} years` : `, the ${ordinal(c.rankPcpn.r)} most for the date in ${c.rankPcpn.n} years`) : "";
+      const temps = c.days === 1 && c.station.temps && c.high != null && c.low != null ? `the high and low were ${c.high}°F and ${c.low}°F${c.nHigh != null ? ` (normal ${Math.round(c.nHigh)}° and ${Math.round(c.nLow)}°)` : ""}, and ` : "";
+      const pc = c.pcpn == null ? "" : c.pcpn > 0 && c.pcpn < 0.01 ? "a trace of precipitation fell" : `${c.pcpn.toFixed(2)} inches of precipitation fell${c.nPcpn != null ? ` against a normal of ${c.nPcpn.toFixed(2)}` : ""}${rk}`;
+      if (temps || pc) p += ` At the ${titleCase(c.station.name)} climate station, ${miles(c.station.km)} miles away, ${temps}${pc || "no precipitation total was reported"}.`;
+    }
+    if (p.trim()) paras.push(p.trim());
+
+    paras.push("Radar hail sizes are estimates, not measurements, and storm reports show where observers saw hail or damage, so their absence does not rule out a storm. "
+      + "This account was drafted automatically from public NOAA and National Weather Service data and is not a certified weather analysis.");
+    return paras;
+  }
+
+  function accountView() {
+    const busy = state.warnings?.loading || state.climate?.loading || state.lightning?.loading || !state.stations.length && !state.obsNote;
+    return `<div class="account"><h5 class="sub">Written account</h5>${accountParas().map((t) => `<p>${esc(t)}</p>`).join("")}
+      <p class="note">${busy ? "Some data are still loading, so this will fill in. " : ""}Drafted from the data above. Read it over before using it in a report.</p>
+      <div class="actions" style="margin-top:.4rem"><button type="button" data-action="copy-account">Copy text</button></div></div>`;
+  }
+
+  async function copyAccount(btn) {
+    const text = accountParas().join("\n\n");
+    try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+    catch { btn.textContent = "Couldn't copy; select the text instead"; }
+    setTimeout(() => { if (btn.isConnected) btn.textContent = "Copy text"; }, 2000);
+  }
+
   // —— CSV downloads and the printed summary ———————————————————————————————————
   function downloadCsv(name, header, rows) {
     const cell = (v) => { const t = v == null ? "" : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
@@ -1346,9 +1504,9 @@
     return out;
   }
 
-  async function printSummary() {
+  /** The printed summary's text: written account, summary, reports, warnings, extras and observations. */
+  function printoutHtml() {
     const q = state.query;
-    if (!q) return;
     const t = (s) => esc(s ?? "");
     const near = state.reports.filter((r) => r.distanceKm <= PRINT_RADIUS_KM).sort((a, b) => a.distanceKm - b.distanceKm);
     const panel = document.createElement("div");
@@ -1356,10 +1514,11 @@
     const stats = [...panel.querySelectorAll(".stat")].map((el) => `<tr><td>${t(el.querySelector("span").firstChild?.textContent)}</td><td><b>${t(el.querySelector("b").textContent)}</b></td><td>${t(el.querySelector("small")?.textContent)}</td></tr>`).join("");
     const ev = new Date(q.isoUtc).getTime();
     const fmt = (v, d = 0) => (v == null ? "—" : v.toFixed(d));
-    $("printout").innerHTML = `
+    return `
       <h1>Weather event summary</h1>
       <p><b>${t(q.label)}</b>${parseLatLon(q.label) ? "" : ` (${q.lat.toFixed(4)}, ${q.lon.toFixed(4)})`} · ${t(formatDisplayUtc(q.isoUtc))}${isRange(q) ? ` · period through ${t(formatDisplayUtc(isoMin(rangeEnd(q))))}` : ""}</p>
       <p class="meta">Prepared ${t(formatDisplayUtc(isoMin(Date.now())))} with Standard Weather PastWeather · ${t(location.href)}</p>
+      <h2>Written account</h2>${accountParas().map((x) => `<p>${t(x)}</p>`).join("")}
       <h2>Summary</h2><table><tbody>${stats}</tbody></table>
       <h2>Storm reports within 10 miles (${near.length})</h2>
       ${near.length ? `<table><thead><tr><th>Time (UTC)</th><th>Type</th><th>Size / speed</th><th>Location</th><th>Distance</th><th>Source</th></tr></thead><tbody>
@@ -1384,6 +1543,13 @@
         Warnings: NWS products as archived by the Iowa Environmental Mesonet. Lightning: NOAA GOES Geostationary Lightning Mapper, located to about 3–6 miles.
         Climate normals and records, daily snowfall and snow depth: NOAA Regional Climate Centers (ACIS). Daily peak gusts: NCEI daily summaries (GHCN-Daily).
         This summary is not a certified weather analysis. For a certified report, contact Standard Weather Forensics &amp; Consulting at standardweather.github.io.</p>`;
+  }
+
+  async function printSummary() {
+    const q = state.query;
+    if (!q) return;
+    const near = state.reports.filter((r) => r.distanceKm <= PRINT_RADIUS_KM).sort((a, b) => a.distanceKm - b.distanceKm);
+    $("printout").innerHTML = printoutHtml();
     // Size the map to the page, frame the place and nearby reports, give the tiles a moment, then print.
     document.body.classList.add("printing");
     map.invalidateSize();
@@ -1423,6 +1589,7 @@
   $("panel").addEventListener("click", (e) => {
     const action = e.target.closest("[data-action]")?.dataset.action;
     if (action === "print") return printSummary();
+    if (action === "copy-account") return copyAccount(e.target.closest("[data-action]"));
     if (action === "csv-reports") return csvReports();
     if (action === "csv-obs") return csvObs();
     if (action === "csv-history") return csvHistory();
@@ -1473,7 +1640,9 @@
     let frame = null, error = null;
     if (!MRMS.isBeforeArchive(isoUtc)) frame = await MRMS.fetchFrame(isoUtc, q.lat, q.lon).catch((e) => { error = e.message; return null; });
     if (token !== state.loadToken) return;
+    if (state.replay) return;   // the replay owns the radar layer while it's open
     state.radarInfo = frame;
+    if (isoUtc === q.isoUtc) state.eventRadar = { q, frame };
     overlay(layers.radar, frame, "radar");
     $("frameTime").innerHTML = frame ? `<b>Radar ${esc(formatDisplayUtc(frame.timeIso))}</b>` : esc(error || "No radar for this time");
     $("reset").hidden = Math.abs(new Date(isoUtc) - new Date(q.isoUtc)) < 60e3;
@@ -1528,6 +1697,7 @@
   }
 
   async function run(q) {
+    stopReplay(false);
     state.query = q;
     state.radarIso = q.isoUtc;
     state.reports = []; state.stations = []; state.hail = state.rotation = state.rain = null; state.selectedReport = null; state.obsNote = null;
@@ -1572,6 +1742,7 @@
         if (state.view === "summary") render();
       }),
       loadLightning(q, LIGHTNING_WINDOWS[0]),
+      loadTimeZone(q),
       loadObservations(q).then(({ stations, note }) => {
         if (state.query !== q) return;
         state.stations = stations;
@@ -1584,7 +1755,7 @@
     if (state.view === "dol") loadDol(q, state.dol?.span || 30);
     if (state.view === "winter") startWinter(q);
     await Promise.allSettled(tasks);
-    if (state.query === q) { setStatus(""); render(); }
+    if (state.query === q) { state.settled = q; setStatus(""); render(); }
   }
 
   /** Location only: geocode and show the History view. */
@@ -1634,7 +1805,8 @@
 
   $("scrub").addEventListener("click", (e) => {
     const b = e.target.closest("button");
-    if (!b || !state.query) return;
+    if (!b || !state.query || b.id === "play") return;
+    stopReplay(false);
     if (b.id === "reset") state.radarIso = state.query.isoUtc;
     else if (b.dataset.step) state.radarIso = shiftIso(state.radarIso, Number(b.dataset.step));
     else return;
@@ -1648,6 +1820,340 @@
     e.target.checked ? layers[k].addTo(map) : layers[k].remove();
     drawLegend();
   });
+
+  // —— Storm replay: a radar loop around the event time, with reports and lightning appearing as they happened ————
+  // Each frame is one MRMS SeamlessHSR file (about 1.3 MB) cropped to the map view, so a loop is 16–19 downloads.
+  const REPLAY_SPANS = [
+    { key: "30", label: "±30 min", before: 30, after: 30, step: 4 },
+    { key: "60", label: "−1 h to +30 min", before: 60, after: 30, step: 5 },
+    { key: "120", label: "−2 h to +1 h", before: 120, after: 60, step: 10 },
+  ];
+  const REPLAY_MS = 550;   // how long each frame shows, on screen and in the video
+
+  function relMin(t) {
+    const m = Math.round((t - Date.parse(state.query.isoUtc)) / 60e3);
+    return m === 0 ? "event time" : `${m < 0 ? "−" : "+"}${Math.abs(m)} min`;
+  }
+
+  async function loadReplay(spanKey) {
+    const q = state.query;
+    if (!q) return;
+    stopReplay(false);
+    const span = REPLAY_SPANS.find((s) => s.key === spanKey) || REPLAY_SPANS[1];
+    const t0 = Date.parse(q.isoUtc);
+    const times = [];
+    for (let m = -span.before; m <= span.after; m += span.step) times.push(t0 + m * 60e3);
+    const b = map.getBounds().pad(0.1);
+    const bounds = { south: Math.max(20, b.getSouth()), north: Math.min(55, b.getNorth()), west: Math.max(-130, b.getWest()), east: Math.min(-60, b.getEast()) };
+    const rp = state.replay = { q, span, times, frames: times.map(() => undefined), images: [], i: 0, done: 0, playing: false, overlay: null };
+    layers.radar.clearLayers();
+    renderReplay();
+    const queue = times.map((_, i) => i);
+    const worker = async () => {
+      for (let i; (i = queue.shift()) != null;) {
+        const f = await MRMS.fetchProduct("reflectivity", isoMin(times[i]), q.lat, q.lon, { bounds, maxPixels: 1400 }).catch(() => null);
+        if (state.replay !== rp) return;
+        rp.frames[i] = f;
+        if (f) { const img = new Image(); img.src = f.url; rp.images[i] = img; }
+        rp.done++;
+        if (!rp.playing && f && (rp.frames[rp.i] == null)) showReplayFrame(i);
+        renderReplay();
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (state.replay !== rp) return;
+    rp.ready = true;
+    state.replayAt = { q, step: span.step, list: times.map((t, i) => ({ t, at: rp.frames[i] ? Math.max(0, rp.frames[i].at ?? 0) : null })) };
+    if (!rp.frames.some(Boolean)) { rp.error = "No radar frames were found for this time."; renderReplay(); return; }
+    renderReplay();
+    if (state.view === "summary") render();
+    playReplay(true);
+  }
+
+  /** Show frame i: its radar, the reports made by then and the lightning in the minutes before it. */
+  function showReplayFrame(i) {
+    const rp = state.replay;
+    if (!rp) return;
+    rp.i = i;
+    const t = rp.times[i], f = rp.frames[i];
+    if (f) {
+      if (!rp.overlay) rp.overlay = L.imageOverlay(f.url, f.bounds, { pane: "radar", opacity: f.opacity, interactive: false }).addTo(layers.radar);
+      else rp.overlay.setUrl(f.url);
+    }
+    for (const r of state.reports) {
+      const m = reportMarkers[r.id];
+      if (m) m.setStyle(Date.parse(r.timeUtc) <= t ? { opacity: 1, fillOpacity: 0.92 } : { opacity: 0, fillOpacity: 0 });
+    }
+    layers.lightning.clearLayers();
+    for (const fl of replayFlashes(t)) {
+      L.circleMarker([fl.lat, fl.lon], { pane: "lightning", radius: 2.8, color: "#060818", weight: 0.6, fillColor: "#ffe14a", fillOpacity: 0.9, interactive: false }).addTo(layers.lightning);
+    }
+    $("frameTime").innerHTML = `<b>${esc(formatDisplayUtc(isoMin(t)))}</b> · ${esc(relMin(t))}${f ? "" : " · no radar"}`;
+    const slider = $("replayFrame");
+    if (slider) slider.value = String(i);
+  }
+  const replayFlashes = (t) => (state.lightning?.flashes || []).filter((fl) => fl.t <= t && fl.t > t - state.replay.span.step * 60e3);
+
+  function playReplay(on) {
+    const rp = state.replay;
+    if (!rp) return;
+    clearInterval(rp.timer);
+    rp.playing = on;
+    if (on) {
+      const next = () => {
+        let i = rp.i;
+        for (let k = 0; k < rp.times.length; k++) { i = (i + 1) % rp.times.length; if (rp.frames[i]) break; }
+        showReplayFrame(i);
+      };
+      rp.timer = setInterval(next, REPLAY_MS);
+    }
+    renderReplay();
+  }
+
+  /** Close the replay and put the map back to the single radar frame, all reports and the event-time lightning. */
+  function stopReplay(restore = true) {
+    const rp = state.replay;
+    if (!rp) return;
+    clearInterval(rp.timer);
+    state.replay = null;
+    layers.radar.clearLayers();
+    for (const m of Object.values(reportMarkers)) m.setStyle({ opacity: 1, fillOpacity: 0.92 });
+    drawLightning();
+    renderReplay();
+    if (restore && state.query) loadRadar(state.radarIso);
+  }
+
+  /** The replay bar. Built once per replay and then updated in place, so dragging the slider isn't interrupted. */
+  function renderReplay() {
+    const el = $("replay");
+    const rp = state.replay;
+    el.hidden = !rp;
+    $("play").setAttribute("aria-pressed", String(!!rp));
+    if (!rp) { el.innerHTML = ""; delete el.dataset.for; return; }
+    const n = rp.times.length, any = rp.frames.some(Boolean);
+    if (el.dataset.for !== String(rp.times[0]) + rp.span.key) {
+      el.dataset.for = String(rp.times[0]) + rp.span.key;
+      el.innerHTML = `<button type="button" data-replay="toggle"></button>
+        <input type="range" id="replayFrame" min="0" max="${n - 1}" value="${rp.i}" aria-label="Replay frame" />
+        <span class="info"></span>
+        <span class="spans" role="group" aria-label="Replay span">${REPLAY_SPANS.map((s) => `<button type="button" data-span="${s.key}" aria-pressed="${s === rp.span}">${s.label}</button>`).join("")}</span>
+        <button type="button" data-replay="video" hidden>Save video</button>
+        <button type="button" data-replay="close" title="Close the replay">✕</button>`;
+    }
+    const toggle = el.querySelector('[data-replay="toggle"]');
+    toggle.textContent = rp.playing ? "❚❚" : "▶";
+    toggle.title = rp.playing ? "Pause" : "Play";
+    toggle.disabled = !any || !!rp.recording;
+    el.querySelector("#replayFrame").disabled = !any || !!rp.recording;
+    el.querySelector(".info").textContent = rp.error || rp.recording || (rp.ready ? `${rp.frames.filter(Boolean).length} frames · every ${rp.span.step} min` : `Loading radar ${rp.done} of ${n}…`);
+    const video = el.querySelector('[data-replay="video"]');
+    video.hidden = !(rp.ready && any);
+    video.disabled = !!rp.recording;
+  }
+
+  // —— Replay video: the same frames drawn onto a canvas and recorded with MediaRecorder ————————————
+  function loadImage(src) {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = src;
+    });
+  }
+
+  /**
+   * Draws the current map view onto a canvas (up to maxWidth px): the Esri basemap and labels, an MRMS image, the
+   * warning polygons in effect, lightning, reports, the place, and a title bar with a color key. Used for the replay
+   * video and the case-file map.
+   */
+  async function mapPainter(maxWidth) {
+    const canvas = document.createElement("canvas");
+    const size = map.getSize();
+    const scale = Math.min(1, maxWidth / size.x);
+    canvas.width = Math.round((size.x * scale) / 2) * 2;
+    canvas.height = Math.round((size.y * scale) / 2) * 2;
+    const ctx = canvas.getContext("2d");
+    const z = map.getZoom(), pb = map.getPixelBounds(), nTiles = 2 ** z;
+    const tiles = [];
+    for (let tx = Math.floor(pb.min.x / 256); tx <= Math.floor(pb.max.x / 256); tx++) {
+      for (let ty = Math.max(0, Math.floor(pb.min.y / 256)); ty <= Math.min(nTiles - 1, Math.floor(pb.max.y / 256)); ty++) {
+        tiles.push({ px: tx * 256 - pb.min.x, py: ty * 256 - pb.min.y, x: ((tx % nTiles) + nTiles) % nTiles, y: ty });
+      }
+    }
+    const tileUrl = (name, t) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${name}/MapServer/tile/${z}/${t.y}/${t.x}`;
+    await Promise.all(tiles.map(async (t) => {
+      [t.base, t.labels] = await Promise.all([loadImage(tileUrl("World_Dark_Gray_Base", t)), loadImage(tileUrl("World_Dark_Gray_Reference", t))]);
+    }));
+    const pt = (lat, lon) => map.latLngToContainerPoint([lat, lon]);
+    const q = state.query;
+
+    /** o: { image, frame (MRMS result for the image), t (warnings in effect then), flashes, reports, title, sub, right, right2, key } */
+    function paint(o) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = "#0b0d16";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      for (const tl of tiles) if (tl.base) ctx.drawImage(tl.base, tl.px, tl.py, 256, 256);
+      if (o.image && o.frame) {
+        const f = o.frame, nw = pt(f.bounds[1][0], f.bounds[0][1]), se = pt(f.bounds[0][0], f.bounds[1][1]);
+        ctx.globalAlpha = f.opacity;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(o.image, nw.x, nw.y, se.x - nw.x, se.y - nw.y);
+        ctx.imageSmoothingEnabled = true;
+      }
+      ctx.globalAlpha = 0.85;
+      for (const tl of tiles) if (tl.labels) ctx.drawImage(tl.labels, tl.px, tl.py, 256, 256);
+      ctx.globalAlpha = 1;
+      for (const sh of o.t != null && state.on.warnings ? state.warnings?.shapes || [] : []) {
+        const pr = sh.properties;
+        if (!(Date.parse(pr.polygon_begin) <= o.t && o.t < Date.parse(pr.polygon_end))) continue;
+        const polys = sh.geometry.type === "Polygon" ? [sh.geometry.coordinates] : sh.geometry.type === "MultiPolygon" ? sh.geometry.coordinates : [];
+        ctx.strokeStyle = WARN_COLOR[pr.phenomena] || "#fff";
+        ctx.lineWidth = 2.5;
+        for (const poly of polys) {
+          ctx.beginPath();
+          poly[0].forEach(([lon, lat], k) => { const p = pt(lat, lon); k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+      const dot = (lat, lon, r, fill, stroke, w) => { const p = pt(lat, lon); ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = w; ctx.strokeStyle = stroke; ctx.stroke(); };
+      if (state.on.lightning) for (const fl of o.flashes || []) dot(fl.lat, fl.lon, 2.8, "#ffe14a", "#060818", 0.6);
+      if (state.on.reports) for (const r of o.reports || []) if (Number.isFinite(r.lat)) dot(r.lat, r.lon, 5.5, REPORT_COLOR[r.type], r.source.startsWith("NCEI") ? "#fff" : "#060818", 1.5);
+      dot(q.lat, q.lon, 7, "#4ad1ff", "#fff", 2.5);
+
+      // Title bar, color key and credits, drawn at canvas scale.
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const W = canvas.width, H = canvas.height, u = Math.max(1, W / 900);
+      const mono = (px, w = "") => `${w}${px * u}px "IBM Plex Mono", ui-monospace, monospace`;
+      ctx.fillStyle = "rgba(7, 9, 20, 0.84)";
+      ctx.fillRect(0, 0, W, 46 * u);
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      ctx.fillStyle = "#fff";
+      ctx.font = `600 ${17 * u}px Outfit, system-ui, sans-serif`;
+      ctx.fillText(o.title.length > 48 ? o.title.slice(0, 47) + "…" : o.title, 14 * u, 17 * u);
+      ctx.font = mono(12);
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillText(o.sub, 14 * u, 34 * u);
+      ctx.textAlign = "right";
+      ctx.fillStyle = "#fff";
+      ctx.font = mono(15, "500 ");
+      ctx.fillText(o.right, W - 14 * u, 17 * u);
+      ctx.font = mono(12);
+      ctx.fillStyle = "#4ad1ff";
+      ctx.fillText(o.right2 || "", W - 14 * u, 34 * u);
+      if (o.key) {
+        const kw = 150 * u, kh = 8 * u, kx = W - kw - 14 * u, ky = H - 30 * u;
+        ctx.fillStyle = "rgba(7, 9, 20, 0.75)";
+        ctx.fillRect(kx - 8 * u, ky - 16 * u, kw + 16 * u, 38 * u);
+        const g = ctx.createLinearGradient(kx, 0, kx + kw, 0);
+        o.key.colors.forEach((c, k, a) => g.addColorStop(k / (a.length - 1), c));
+        ctx.fillStyle = g;
+        ctx.fillRect(kx, ky, kw, kh);
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.font = mono(10);
+        ctx.textAlign = "left";
+        ctx.fillText(o.key.low, kx, ky - 7 * u);
+        ctx.textAlign = "right";
+        ctx.fillText(o.key.high, kx + kw, ky - 7 * u);
+      }
+      ctx.textAlign = "left";
+      ctx.fillStyle = "rgba(255,255,255,0.75)";
+      ctx.font = mono(10);
+      ctx.fillText("Radar: NOAA MRMS · Reports: NOAA SPC/NCEI · Warnings: NWS via IEM · Lightning: NOAA GOES · Map: Esri", 14 * u, H - 12 * u);
+    }
+    return { canvas, paint };
+  }
+  const DBZ_KEY = { colors: ["#8787e3", "#3263c6", "#00c600", "#008600", "#ffc600", "#ff8600", "#d40000", "#c600c6"], low: "dBZ 15", high: "70" };
+
+  async function saveReplayVideo() {
+    const rp = state.replay;
+    if (!rp?.ready || rp.recording) return;
+    const mime = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    if (!mime || !HTMLCanvasElement.prototype.captureStream) { rp.error = "This browser can't record video. Try Chrome, Edge, Firefox or Safari."; renderReplay(); return; }
+    playReplay(false);
+    rp.recording = "Preparing video…";
+    renderReplay();
+    const [{ canvas, paint }, frames] = await Promise.all([mapPainter(1280), Promise.all(rp.frames.map((f) => (f ? loadImage(f.url) : null)))]);
+    if (state.replay !== rp) return;
+    const zone = zoneFor(rp.q);
+    const draw = (i) => {
+      const t = rp.times[i];
+      paint({ image: frames[i], frame: rp.frames[i], t, flashes: replayFlashes(t), reports: state.reports.filter((r) => Date.parse(r.timeUtc) <= t),
+        title: rp.q.label, sub: "PastWeather radar replay · Standard Weather", right: formatDisplayUtc(isoMin(t)), right2: `${zone ? localTime(t) + " · " : ""}${relMin(t)}`, key: DBZ_KEY });
+    };
+
+    const stream = canvas.captureStream(30);
+    const chunks = [];
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 5e6 });
+    rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+    const stopped = new Promise((r) => { rec.onstop = r; });
+    rec.start(250);
+    const order = rp.times.map((_, i) => i).filter((i) => rp.frames[i]);
+    for (let k = 0; k < order.length; k++) {
+      if (state.replay !== rp) { rec.stop(); return; }
+      rp.recording = `Recording video, frame ${k + 1} of ${order.length}…`;
+      renderReplay();
+      showReplayFrame(order[k]);
+      // Redraw through the hold so every recorder sees a steady stream of frames.
+      const hold = k === order.length - 1 ? 2000 : REPLAY_MS;
+      for (let ms = 0; ms < hold; ms += 100) { draw(order[k]); await sleep(100); }
+    }
+    rec.stop();
+    await stopped;
+    const ext = mime.includes("mp4") ? "mp4" : "webm";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(chunks, { type: mime.split(";")[0] }));
+    a.download = `${fileStem()}-radar-replay.${ext}`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    rp.recording = null;
+    renderReplay();
+  }
+
+  $("play").addEventListener("click", () => (state.replay ? stopReplay() : loadReplay(REPLAY_SPANS[1].key)));
+  $("replay").addEventListener("click", (e) => {
+    const span = e.target.closest("[data-span]")?.dataset.span;
+    if (span) return loadReplay(span);
+    const act = e.target.closest("[data-replay]")?.dataset.replay;
+    if (act === "toggle") playReplay(!state.replay.playing);
+    if (act === "close") stopReplay();
+    if (act === "video") saveReplayVideo();
+  });
+  $("replay").addEventListener("input", (e) => {
+    if (e.target.id !== "replayFrame" || !state.replay) return;
+    playReplay(false);
+    showReplayFrame(+e.target.value);
+  });
+
+  // —— Case file: the home page's case file (/case.html) opens this page in a frame and reads the summary from here ————
+  window.SWCase = {
+    place: () => (state.query ? { label: state.query.label, lat: state.query.lat, lon: state.query.lon, isoUtc: state.query.isoUtc } : null),
+    status() {
+      if (!state.query) return $("err").hidden ? "loading" : "error";
+      const q = state.query;
+      return state.settled === q && !state.lightning?.loading && state.tz?.q === q ? "ready" : "loading";
+    },
+    error: () => $("err").textContent,
+    /** The map (24-hour hail swath, or radar at the event time), then the printed summary. */
+    async section() {
+      const q = state.query;
+      map.setView([q.lat, q.lon], 9, { animate: false });
+      await sleep(400);
+      const hail = state.hail && state.hail.peak > 0 ? state.hail : null;
+      const frame = hail || state.eventRadar?.frame || null;
+      const [{ canvas, paint }, image] = await Promise.all([mapPainter(1100), frame ? loadImage(frame.url) : null]);
+      const t = Date.parse(q.isoUtc);
+      paint({ image, frame, t, reports: state.reports, flashes: state.lightning?.flashes || [], title: q.label,
+        sub: hail ? "Radar-estimated hail size, 24 h · reports · warnings at the time" : "Radar at the event time · reports · warnings at the time",
+        right: formatDisplayUtc(q.isoUtc), right2: zoneFor(q) ? localTime(t) : "",
+        key: hail ? { colors: MRMS.legends.hail.map(([, c]) => `rgb(${c})`), low: `hail ${MRMS.legends.hail[0][0].toFixed(2)}"`, high: `${MRMS.legends.hail[MRMS.legends.hail.length - 1][0].toFixed(1)}"+` } : DBZ_KEY });
+      return { title: "PastWeather", html: `<img class="map" alt="Map of ${esc(q.label)}" src="${canvas.toDataURL("image/jpeg", 0.88)}" />${printoutHtml()}` };
+    },
+  };
 
   // Open a shared link: ?loc=Moore, OK&date=2024-05-01&time=2215
   const p = new URLSearchParams(location.search);

@@ -52,6 +52,25 @@
     table.t tr.go:hover { background: rgba(255, 255, 255, 0.04); }
     .verdict { margin: 0.5rem 0 0.4rem; padding: 0.1rem 0.7rem 0.5rem; border-left: 3px solid var(--accent); background: rgba(74, 209, 255, 0.05); }
     .verdict .note b { color: #fff; }
+    .scrub .replay-btn { min-width: 0; padding: 0.1rem 0.5rem; border: 1px solid var(--rule); border-radius: 5px; font: 0.74rem var(--mono); color: var(--accent); white-space: nowrap; }
+    .scrub .replay-btn[aria-pressed="true"] { background: var(--accent); color: #060818; }
+    .replay {
+      position: absolute; z-index: 800; left: 1rem; bottom: 3.6rem; width: min(34rem, calc(100% - 2rem));
+      display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.7rem; padding: 0.5rem 0.8rem; background: rgba(8, 10, 24, 0.88);
+      border: 1px solid var(--rule); border-radius: 8px; font: 0.74rem var(--mono); color: var(--text2);
+    }
+    .replay button { all: unset; cursor: pointer; color: #fff; }
+    .replay button:disabled { opacity: 0.35; cursor: default; }
+    .replay button[data-replay="toggle"] { min-width: 1.4rem; text-align: center; font-size: 0.85rem; }
+    .replay button[data-replay="video"] { color: var(--accent); }
+    .replay input[type="range"] { flex: 1; min-width: 6rem; appearance: auto; -webkit-appearance: auto; width: auto; min-height: 0; padding: 0; border: 0; background: none; accent-color: var(--accent); box-shadow: none; }
+    .replay .info { flex-basis: 100%; order: 3; color: var(--text3); }
+    .replay .spans { display: flex; gap: 0.7rem; order: 2; }
+    .replay .spans button { color: var(--text2); }
+    .replay .spans button[aria-pressed="true"] { color: #fff; text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 0.3em; }
+    .account { margin-top: 0.9rem; padding-top: 0.2rem; border-top: 1px solid var(--rule); }
+    .account p { font-size: 0.82rem; line-height: 1.55; color: rgba(255, 255, 255, 0.86); margin: 0.45rem 0 0; max-width: none; }
+    .account p.note { color: var(--text3); font-size: 0.74rem; }
     #printout { display: none; }
     /* Print summary: the map, then the summary, reports and observations on white. */
     body.printing .stage { width: 7.2in; height: 4.4in; flex: none; }
@@ -118,8 +137,8 @@
       </div>
       <div class="scroll" id="panel">
         <div class="hint">Enter a place and a UTC date and time. PastWeather shows NOAA radar at that moment, the day's
-          <b>hail-size</b> and <b>rotation</b> swaths, storm reports, the <b>NWS warnings</b> in effect, nearby <b>lightning</b>,
-          measured observations from the nearest stations, and how the day compares with <b>normals and records</b>.
+          <b>hail-size</b> and <b>rotation</b> swaths, a <b>radar replay</b> you can save as a video, storm reports, the <b>NWS warnings</b> in effect, nearby <b>lightning</b>,
+          measured observations from the nearest stations, and how the day compares with <b>normals and records</b>, with a <b>written account</b> of it all to paste into a report.
           Radar and swaths are available from October 14, 2020.
           <br /><br />Add a <b>through date</b> to total wind and rain over a stretch of days, or leave the date blank to see
           the place's <b>hail, wind and tornado history</b> back to 1950.
@@ -152,7 +171,9 @@
         <span class="when" id="frameTime"></span>
         <div class="steps" aria-label="Step forward"><button data-step="5">+5</button><button data-step="15">+15</button><button data-step="60">+60</button></div>
         <button id="reset" title="Back to the event time" hidden>⟲</button>
+        <button id="play" class="replay-btn" title="Replay the radar around the event time" aria-pressed="false">▶ Replay</button>
       </div>
+      <div class="replay" id="replay" hidden></div>
     </section>
   </div>
 
@@ -165,6 +186,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/js/mrms.js?v=2"></script>
   <script src="glm.js?v=1"></script>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
