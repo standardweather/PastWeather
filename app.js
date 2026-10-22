@@ -573,6 +573,7 @@
     html += `<div class="actions">
       <a class="cta" href="${esc(requestUrl())}">Request a certified report</a>
       <button type="button" data-action="print">Print summary</button>
+      <a href="/case.html?${new URLSearchParams({ loc: $("location").value.trim() || `${q.lat.toFixed(4)},${q.lon.toFixed(4)}`, date: q.isoUtc.slice(0, 10), time: q.isoUtc.slice(11, 16).replace(":", "") })}">Build a case file</a>
       <a href="/NowWeather/?loc=${q.lat.toFixed(4)},${q.lon.toFixed(4)}">Weather here now</a>
       <a href="/FutureWeather/?loc=${q.lat.toFixed(3)},${q.lon.toFixed(3)}">Forecast here</a>
     </div>`;
@@ -1503,9 +1504,9 @@
     return out;
   }
 
-  async function printSummary() {
+  /** The printed summary's text: written account, summary, reports, warnings, extras and observations. */
+  function printoutHtml() {
     const q = state.query;
-    if (!q) return;
     const t = (s) => esc(s ?? "");
     const near = state.reports.filter((r) => r.distanceKm <= PRINT_RADIUS_KM).sort((a, b) => a.distanceKm - b.distanceKm);
     const panel = document.createElement("div");
@@ -1513,7 +1514,7 @@
     const stats = [...panel.querySelectorAll(".stat")].map((el) => `<tr><td>${t(el.querySelector("span").firstChild?.textContent)}</td><td><b>${t(el.querySelector("b").textContent)}</b></td><td>${t(el.querySelector("small")?.textContent)}</td></tr>`).join("");
     const ev = new Date(q.isoUtc).getTime();
     const fmt = (v, d = 0) => (v == null ? "—" : v.toFixed(d));
-    $("printout").innerHTML = `
+    return `
       <h1>Weather event summary</h1>
       <p><b>${t(q.label)}</b>${parseLatLon(q.label) ? "" : ` (${q.lat.toFixed(4)}, ${q.lon.toFixed(4)})`} · ${t(formatDisplayUtc(q.isoUtc))}${isRange(q) ? ` · period through ${t(formatDisplayUtc(isoMin(rangeEnd(q))))}` : ""}</p>
       <p class="meta">Prepared ${t(formatDisplayUtc(isoMin(Date.now())))} with Standard Weather PastWeather · ${t(location.href)}</p>
@@ -1542,6 +1543,13 @@
         Warnings: NWS products as archived by the Iowa Environmental Mesonet. Lightning: NOAA GOES Geostationary Lightning Mapper, located to about 3–6 miles.
         Climate normals and records, daily snowfall and snow depth: NOAA Regional Climate Centers (ACIS). Daily peak gusts: NCEI daily summaries (GHCN-Daily).
         This summary is not a certified weather analysis. For a certified report, contact Standard Weather Forensics &amp; Consulting at standardweather.github.io.</p>`;
+  }
+
+  async function printSummary() {
+    const q = state.query;
+    if (!q) return;
+    const near = state.reports.filter((r) => r.distanceKm <= PRINT_RADIUS_KM).sort((a, b) => a.distanceKm - b.distanceKm);
+    $("printout").innerHTML = printoutHtml();
     // Size the map to the page, frame the place and nearby reports, give the tiles a moment, then print.
     document.body.classList.add("printing");
     map.invalidateSize();
@@ -1747,7 +1755,7 @@
     if (state.view === "dol") loadDol(q, state.dol?.span || 30);
     if (state.view === "winter") startWinter(q);
     await Promise.allSettled(tasks);
-    if (state.query === q) { setStatus(""); render(); }
+    if (state.query === q) { state.settled = q; setStatus(""); render(); }
   }
 
   /** Location only: geocode and show the History view. */
@@ -1954,19 +1962,15 @@
     });
   }
 
-  async function saveReplayVideo() {
-    const rp = state.replay;
-    if (!rp?.ready || rp.recording) return;
-    const mime = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+  /**
+   * Draws the current map view onto a canvas (up to maxWidth px): the Esri basemap and labels, an MRMS image, the
+   * warning polygons in effect, lightning, reports, the place, and a title bar with a color key. Used for the replay
+   * video and the case-file map.
+   */
+  async function mapPainter(maxWidth) {
     const canvas = document.createElement("canvas");
-    if (!mime || !canvas.captureStream) { rp.error = "This browser can't record video. Try Chrome, Edge, Firefox or Safari."; renderReplay(); return; }
-    playReplay(false);
-    rp.recording = "Preparing video…";
-    renderReplay();
-
-    // The video matches the map view: an even-sized canvas up to 1280 px wide.
     const size = map.getSize();
-    const scale = Math.min(1, 1280 / size.x);
+    const scale = Math.min(1, maxWidth / size.x);
     canvas.width = Math.round((size.x * scale) / 2) * 2;
     canvas.height = Math.round((size.y * scale) / 2) * 2;
     const ctx = canvas.getContext("2d");
@@ -1974,43 +1978,37 @@
     const tiles = [];
     for (let tx = Math.floor(pb.min.x / 256); tx <= Math.floor(pb.max.x / 256); tx++) {
       for (let ty = Math.max(0, Math.floor(pb.min.y / 256)); ty <= Math.min(nTiles - 1, Math.floor(pb.max.y / 256)); ty++) {
-        const x = ((tx % nTiles) + nTiles) % nTiles;
-        tiles.push({ px: tx * 256 - pb.min.x, py: ty * 256 - pb.min.y, x, y: ty });
+        tiles.push({ px: tx * 256 - pb.min.x, py: ty * 256 - pb.min.y, x: ((tx % nTiles) + nTiles) % nTiles, y: ty });
       }
     }
     const tileUrl = (name, t) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/${name}/MapServer/tile/${z}/${t.y}/${t.x}`;
     await Promise.all(tiles.map(async (t) => {
       [t.base, t.labels] = await Promise.all([loadImage(tileUrl("World_Dark_Gray_Base", t)), loadImage(tileUrl("World_Dark_Gray_Reference", t))]);
     }));
-    const frames = await Promise.all(rp.frames.map((f) => (f ? loadImage(f.url) : null)));
-    if (state.replay !== rp) return;
     const pt = (lat, lon) => map.latLngToContainerPoint([lat, lon]);
-    const zone = zoneFor(rp.q);
-    const shapes = state.on.warnings ? state.warnings?.shapes || [] : [];
+    const q = state.query;
 
-    function draw(i) {
-      const t = rp.times[i];
+    /** o: { image, frame (MRMS result for the image), t (warnings in effect then), flashes, reports, title, sub, right, right2, key } */
+    function paint(o) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.fillStyle = "#0b0d16";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.setTransform(scale, 0, 0, scale, 0, 0);
       for (const tl of tiles) if (tl.base) ctx.drawImage(tl.base, tl.px, tl.py, 256, 256);
-      const img = frames[i], f = rp.frames[i];
-      if (img && f) {
-        const nw = pt(f.bounds[1][0], f.bounds[0][1]), se = pt(f.bounds[0][0], f.bounds[1][1]);
+      if (o.image && o.frame) {
+        const f = o.frame, nw = pt(f.bounds[1][0], f.bounds[0][1]), se = pt(f.bounds[0][0], f.bounds[1][1]);
         ctx.globalAlpha = f.opacity;
         ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(img, nw.x, nw.y, se.x - nw.x, se.y - nw.y);
+        ctx.drawImage(o.image, nw.x, nw.y, se.x - nw.x, se.y - nw.y);
         ctx.imageSmoothingEnabled = true;
       }
       ctx.globalAlpha = 0.85;
       for (const tl of tiles) if (tl.labels) ctx.drawImage(tl.labels, tl.px, tl.py, 256, 256);
       ctx.globalAlpha = 1;
-      // Warning polygons in effect at the frame time.
-      for (const s of shapes) {
-        const pr = s.properties;
-        if (!(Date.parse(pr.polygon_begin) <= t && t < Date.parse(pr.polygon_end))) continue;
-        const polys = s.geometry.type === "Polygon" ? [s.geometry.coordinates] : s.geometry.type === "MultiPolygon" ? s.geometry.coordinates : [];
+      for (const sh of o.t != null && state.on.warnings ? state.warnings?.shapes || [] : []) {
+        const pr = sh.properties;
+        if (!(Date.parse(pr.polygon_begin) <= o.t && o.t < Date.parse(pr.polygon_end))) continue;
+        const polys = sh.geometry.type === "Polygon" ? [sh.geometry.coordinates] : sh.geometry.type === "MultiPolygon" ? sh.geometry.coordinates : [];
         ctx.strokeStyle = WARN_COLOR[pr.phenomena] || "#fff";
         ctx.lineWidth = 2.5;
         for (const poly of polys) {
@@ -2021,46 +2019,71 @@
         }
       }
       const dot = (lat, lon, r, fill, stroke, w) => { const p = pt(lat, lon); ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = w; ctx.strokeStyle = stroke; ctx.stroke(); };
-      if (state.on.lightning) for (const fl of replayFlashes(t)) dot(fl.lat, fl.lon, 2.8, "#ffe14a", "#060818", 0.6);
-      if (state.on.reports) for (const r of state.reports) if (Date.parse(r.timeUtc) <= t && Number.isFinite(r.lat)) dot(r.lat, r.lon, 5.5, REPORT_COLOR[r.type], r.source.startsWith("NCEI") ? "#fff" : "#060818", 1.5);
-      dot(rp.q.lat, rp.q.lon, 7, "#4ad1ff", "#fff", 2.5);
+      if (state.on.lightning) for (const fl of o.flashes || []) dot(fl.lat, fl.lon, 2.8, "#ffe14a", "#060818", 0.6);
+      if (state.on.reports) for (const r of o.reports || []) if (Number.isFinite(r.lat)) dot(r.lat, r.lon, 5.5, REPORT_COLOR[r.type], r.source.startsWith("NCEI") ? "#fff" : "#060818", 1.5);
+      dot(q.lat, q.lon, 7, "#4ad1ff", "#fff", 2.5);
 
-      // Title bar, reflectivity key and credits, drawn at video scale.
+      // Title bar, color key and credits, drawn at canvas scale.
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       const W = canvas.width, H = canvas.height, u = Math.max(1, W / 900);
+      const mono = (px, w = "") => `${w}${px * u}px "IBM Plex Mono", ui-monospace, monospace`;
       ctx.fillStyle = "rgba(7, 9, 20, 0.84)";
       ctx.fillRect(0, 0, W, 46 * u);
-      ctx.fillStyle = "#fff";
       ctx.textBaseline = "middle";
-      ctx.font = `600 ${17 * u}px Outfit, system-ui, sans-serif`;
       ctx.textAlign = "left";
-      ctx.fillText(rp.q.label.length > 48 ? rp.q.label.slice(0, 47) + "…" : rp.q.label, 14 * u, 17 * u);
-      ctx.font = `${12 * u}px "IBM Plex Mono", ui-monospace, monospace`;
+      ctx.fillStyle = "#fff";
+      ctx.font = `600 ${17 * u}px Outfit, system-ui, sans-serif`;
+      ctx.fillText(o.title.length > 48 ? o.title.slice(0, 47) + "…" : o.title, 14 * u, 17 * u);
+      ctx.font = mono(12);
       ctx.fillStyle = "rgba(255,255,255,0.7)";
-      ctx.fillText("PastWeather radar replay · Standard Weather", 14 * u, 34 * u);
+      ctx.fillText(o.sub, 14 * u, 34 * u);
       ctx.textAlign = "right";
       ctx.fillStyle = "#fff";
-      ctx.font = `500 ${15 * u}px "IBM Plex Mono", ui-monospace, monospace`;
-      ctx.fillText(formatDisplayUtc(isoMin(t)), W - 14 * u, 17 * u);
-      ctx.font = `${12 * u}px "IBM Plex Mono", ui-monospace, monospace`;
+      ctx.font = mono(15, "500 ");
+      ctx.fillText(o.right, W - 14 * u, 17 * u);
+      ctx.font = mono(12);
       ctx.fillStyle = "#4ad1ff";
-      ctx.fillText(`${zone ? localTime(t) + " · " : ""}${relMin(t)}`, W - 14 * u, 34 * u);
-      const kw = 150 * u, kh = 8 * u, kx = W - kw - 14 * u, ky = H - 30 * u;
-      const g = ctx.createLinearGradient(kx, 0, kx + kw, 0);
-      ["#8787e3", "#3263c6", "#00c600", "#008600", "#ffc600", "#ff8600", "#d40000", "#c600c6"].forEach((c, k, a) => g.addColorStop(k / (a.length - 1), c));
-      ctx.fillStyle = "rgba(7, 9, 20, 0.75)";
-      ctx.fillRect(kx - 8 * u, ky - 16 * u, kw + 16 * u, 38 * u);
-      ctx.fillStyle = g;
-      ctx.fillRect(kx, ky, kw, kh);
+      ctx.fillText(o.right2 || "", W - 14 * u, 34 * u);
+      if (o.key) {
+        const kw = 150 * u, kh = 8 * u, kx = W - kw - 14 * u, ky = H - 30 * u;
+        ctx.fillStyle = "rgba(7, 9, 20, 0.75)";
+        ctx.fillRect(kx - 8 * u, ky - 16 * u, kw + 16 * u, 38 * u);
+        const g = ctx.createLinearGradient(kx, 0, kx + kw, 0);
+        o.key.colors.forEach((c, k, a) => g.addColorStop(k / (a.length - 1), c));
+        ctx.fillStyle = g;
+        ctx.fillRect(kx, ky, kw, kh);
+        ctx.fillStyle = "rgba(255,255,255,0.75)";
+        ctx.font = mono(10);
+        ctx.textAlign = "left";
+        ctx.fillText(o.key.low, kx, ky - 7 * u);
+        ctx.textAlign = "right";
+        ctx.fillText(o.key.high, kx + kw, ky - 7 * u);
+      }
+      ctx.textAlign = "left";
       ctx.fillStyle = "rgba(255,255,255,0.75)";
-      ctx.font = `${10 * u}px "IBM Plex Mono", ui-monospace, monospace`;
-      ctx.textAlign = "left";
-      ctx.fillText("dBZ 15", kx, ky - 7 * u);
-      ctx.textAlign = "right";
-      ctx.fillText("70", kx + kw, ky - 7 * u);
-      ctx.textAlign = "left";
-      ctx.fillText("Radar: NOAA MRMS · Reports: NOAA SPC/NCEI · Lightning: NOAA GOES · Map: Esri", 14 * u, H - 12 * u);
+      ctx.font = mono(10);
+      ctx.fillText("Radar: NOAA MRMS · Reports: NOAA SPC/NCEI · Warnings: NWS via IEM · Lightning: NOAA GOES · Map: Esri", 14 * u, H - 12 * u);
     }
+    return { canvas, paint };
+  }
+  const DBZ_KEY = { colors: ["#8787e3", "#3263c6", "#00c600", "#008600", "#ffc600", "#ff8600", "#d40000", "#c600c6"], low: "dBZ 15", high: "70" };
+
+  async function saveReplayVideo() {
+    const rp = state.replay;
+    if (!rp?.ready || rp.recording) return;
+    const mime = ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    if (!mime || !HTMLCanvasElement.prototype.captureStream) { rp.error = "This browser can't record video. Try Chrome, Edge, Firefox or Safari."; renderReplay(); return; }
+    playReplay(false);
+    rp.recording = "Preparing video…";
+    renderReplay();
+    const [{ canvas, paint }, frames] = await Promise.all([mapPainter(1280), Promise.all(rp.frames.map((f) => (f ? loadImage(f.url) : null)))]);
+    if (state.replay !== rp) return;
+    const zone = zoneFor(rp.q);
+    const draw = (i) => {
+      const t = rp.times[i];
+      paint({ image: frames[i], frame: rp.frames[i], t, flashes: replayFlashes(t), reports: state.reports.filter((r) => Date.parse(r.timeUtc) <= t),
+        title: rp.q.label, sub: "PastWeather radar replay · Standard Weather", right: formatDisplayUtc(isoMin(t)), right2: `${zone ? localTime(t) + " · " : ""}${relMin(t)}`, key: DBZ_KEY });
+    };
 
     const stream = canvas.captureStream(30);
     const chunks = [];
@@ -2105,6 +2128,32 @@
     playReplay(false);
     showReplayFrame(+e.target.value);
   });
+
+  // —— Case file: the home page's case file (/case.html) opens this page in a frame and reads the summary from here ————
+  window.SWCase = {
+    place: () => (state.query ? { label: state.query.label, lat: state.query.lat, lon: state.query.lon, isoUtc: state.query.isoUtc } : null),
+    status() {
+      if (!state.query) return $("err").hidden ? "loading" : "error";
+      const q = state.query;
+      return state.settled === q && !state.lightning?.loading && state.tz?.q === q ? "ready" : "loading";
+    },
+    error: () => $("err").textContent,
+    /** The map (24-hour hail swath, or radar at the event time), then the printed summary. */
+    async section() {
+      const q = state.query;
+      map.setView([q.lat, q.lon], 9, { animate: false });
+      await sleep(400);
+      const hail = state.hail && state.hail.peak > 0 ? state.hail : null;
+      const frame = hail || state.eventRadar?.frame || null;
+      const [{ canvas, paint }, image] = await Promise.all([mapPainter(1100), frame ? loadImage(frame.url) : null]);
+      const t = Date.parse(q.isoUtc);
+      paint({ image, frame, t, reports: state.reports, flashes: state.lightning?.flashes || [], title: q.label,
+        sub: hail ? "Radar-estimated hail size, 24 h · reports · warnings at the time" : "Radar at the event time · reports · warnings at the time",
+        right: formatDisplayUtc(q.isoUtc), right2: zoneFor(q) ? localTime(t) : "",
+        key: hail ? { colors: MRMS.legends.hail.map(([, c]) => `rgb(${c})`), low: `hail ${MRMS.legends.hail[0][0].toFixed(2)}"`, high: `${MRMS.legends.hail[MRMS.legends.hail.length - 1][0].toFixed(1)}"+` } : DBZ_KEY });
+      return { title: "PastWeather", html: `<img class="map" alt="Map of ${esc(q.label)}" src="${canvas.toDataURL("image/jpeg", 0.88)}" />${printoutHtml()}` };
+    },
+  };
 
   // Open a shared link: ?loc=Moore, OK&date=2024-05-01&time=2215
   const p = new URLSearchParams(location.search);
