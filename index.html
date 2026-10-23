@@ -21,8 +21,8 @@
   <meta name="color-scheme" content="dark" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <!-- Shared theme and console layout from the main site (standardweather.github.io repo). -->
-  <link rel="stylesheet" href="/css/site.css" />
-  <link rel="stylesheet" href="/css/console.css?v=1" />
+  <link rel="stylesheet" href="/css/site.css?v=20261023a" />
+  <link rel="stylesheet" href="/css/console.css?v=2" />
   <style>
     /* PastWeather-only pieces. */
     .report { border-top: 1px solid var(--rule); padding: 0.6rem 1.25rem; cursor: pointer; }
@@ -36,13 +36,21 @@
     .stat:first-of-type { border-top: 0; }
     .stat b { font: 500 1rem var(--mono); color: #fff; white-space: nowrap; }
     .stat small { display: block; color: var(--text3); font-size: 0.72rem; }
-    #views { flex-wrap: wrap; column-gap: 1.1rem; row-gap: 0; align-content: flex-start; flex: none; }
     .scrub .steps { display: flex; gap: 0.15rem; }
     .scrub .steps button { padding: 0 0.25rem; font: 0.74rem var(--mono); color: var(--text2); }
     .scrub .steps button:hover { color: #fff; }
     .scrub .when { flex: 1; text-align: center; }
     .hint { padding: 1rem 1.25rem; font-size: 0.84rem; color: var(--text2); line-height: 1.55; }
     .hint b { color: #fff; }
+    .hint p { margin: 0 0 0.7rem; max-width: none; font-size: 0.84rem; color: var(--text2); line-height: 1.55; }
+    .hint ul { margin: 0 0 0.7rem; padding-left: 1.1rem; }
+    .hint li { margin: 0 0 0.35rem; }
+    .hint .dim { color: var(--text3); font-size: 0.78rem; }
+    .form details.opt summary { cursor: pointer; list-style: none; font-size: 0.78rem; color: var(--accent); }
+    .form details.opt summary::-webkit-details-marker { display: none; }
+    .form details.opt summary::before { content: "+ "; }
+    .form details.opt[open] summary { margin-bottom: 0.45rem; }
+    .form details.opt[open] summary::before { content: "− "; }
     .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.8rem; }
     .actions a, .actions button { all: unset; cursor: pointer; font-size: 0.8rem; color: var(--accent); }
     .actions a:hover, .actions button:hover { text-decoration: underline; }
@@ -77,7 +85,7 @@
     @media print {
       @page { margin: 0.5in; }
       body.console { height: auto; overflow: visible; background: #fff; }
-      .site-nav, .side, .scrub, .status, .leaflet-control-container .leaflet-control-zoom { display: none !important; }
+      .site-nav, .side, .scrub, .status, .layers, .leaflet-control-container .leaflet-control-zoom { display: none !important; }
       .app { display: block; height: auto; }
       .stage { width: 7.2in; height: 4.4in; break-inside: avoid; }
       #printout { display: block; color: #111; font: 10pt/1.45 var(--font); }
@@ -93,18 +101,17 @@
 <body class="console">
   <nav class="site-nav" aria-label="Primary">
     <div class="site-nav__inner">
-      <a class="site-nav__brand" href="/">
+      <a class="site-nav__brand" href="/" title="Standard Weather home">
         <img src="/assets/logo-light.png" width="32" height="32" alt="" />
         Standard Weather
       </a>
       <ul class="site-nav__links">
-        <li><a href="/">Home</a></li>
-        <li><a href="/about.html">About</a></li>
         <li><a href="/PastWeather/" aria-current="page">PastWeather</a></li>
         <li><a href="/NowWeather/">NowWeather</a></li>
         <li><a href="/FutureWeather/">FutureWeather</a></li>
         <li><a href="/TropicalWeather/">TropicalWeather</a></li>
         <li><a href="/AviationWeather/">AviationWeather</a></li>
+        <li><a href="/about.html">About</a></li>
       </ul>
     </div>
   </nav>
@@ -121,7 +128,10 @@
           <div><label for="date">Date (UTC)</label><input id="date" placeholder="YYYY-MM-DD" inputmode="numeric" /></div>
           <div><label for="time">Time (UTC)</label><input id="time" placeholder="HH:MM" inputmode="numeric" /></div>
         </div>
-        <div><label for="through">Through date (UTC, optional, up to 31 days)</label><input id="through" placeholder="YYYY-MM-DD" inputmode="numeric" /></div>
+        <details class="opt" id="throughBox">
+          <summary>Add an end date, to total several days</summary>
+          <div><label for="through">Through date (UTC, up to 31 days)</label><input id="through" placeholder="YYYY-MM-DD" inputmode="numeric" /></div>
+        </details>
         <p class="err" id="err" hidden></p>
         <button class="btn" id="show" type="submit">Show past weather</button>
       </form>
@@ -136,35 +146,43 @@
         <button role="tab" data-view="winter" aria-selected="false">Ice &amp; snow</button>
       </div>
       <div class="scroll" id="panel">
-        <div class="hint">Enter a place and a UTC date and time. PastWeather shows NOAA radar at that moment, the day's
-          <b>hail-size</b> and <b>rotation</b> swaths, a <b>radar replay</b> you can save as a video, storm reports, the <b>NWS warnings</b> in effect, nearby <b>lightning</b>,
-          measured observations from the nearest stations, and how the day compares with <b>normals and records</b>, with a <b>written account</b> of it all to paste into a report.
-          Radar and swaths are available from October 14, 2020.
-          <br /><br />Add a <b>through date</b> to total wind and rain over a stretch of days, or leave the date blank to see
-          the place's <b>hail, wind and tornado history</b> back to 1950.
-          <br /><br /><b>Date of loss</b> compares a claimed date with the days around it, and <b>Ice &amp; snow</b> shows freezing
-          temperatures, freezing rain and snow before the time.</div>
+        <div class="hint">
+          <p><b>Start here:</b> enter a place, a UTC date and a time. You get the radar at that moment, the day's hail and rotation
+            swaths, storm reports, warnings, lightning, nearby observations, and a written account to paste into a report.</p>
+          <p>Other ways to use it:</p>
+          <ul>
+            <li>Leave the date blank to see the place's <b>hail, wind and tornado history</b> back to 1950.</li>
+            <li>Add an end date to total wind and rain over up to 31 days.</li>
+            <li><b>Date of loss</b> compares a claimed date with the days around it. <b>Ice &amp; snow</b> shows freezing weather before the time.</li>
+          </ul>
+          <p class="dim">Radar and swaths are available from October 14, 2020.</p>
+        </div>
       </div>
       <div class="side__foot">
-        <h4>Map layers</h4>
-        <div class="checks" id="layers">
-          <label><input type="checkbox" data-layer="radar" checked /> Radar</label>
-          <label><input type="checkbox" data-layer="reports" checked /> Storm reports</label>
-          <label><input type="checkbox" data-layer="hail" /> Hail size (24 h)</label>
-          <label><input type="checkbox" data-layer="rotation" /> Rotation (24 h)</label>
-          <label><input type="checkbox" data-layer="rain" /> Rain (24 h)</label>
-          <label><input type="checkbox" data-layer="warnings" checked /> NWS warnings</label>
-          <label><input type="checkbox" data-layer="lightning" checked /> Lightning</label>
-          <label><input type="checkbox" data-layer="stations" checked /> Stations</label>
-        </div>
-        <p class="disclaimer">Radar, hail, rotation and rain: NOAA MRMS. Reports: NOAA SPC (preliminary) and NCEI Storm Events (official).
+        <details class="sources"><summary>Data sources · not a certified weather analysis</summary>
+          <p>Radar, hail, rotation and rain: NOAA MRMS. Reports: NOAA SPC (preliminary) and NCEI Storm Events (official).
           Observations: NCEI and the NWS. Warnings: NWS, archived by the Iowa Environmental Mesonet. Lightning: NOAA GOES GLM.
-          Normals and records: NOAA ACIS. Not a substitute for a certified weather analysis.</p>
+          Normals and records: NOAA ACIS. Not a substitute for a certified weather analysis.</p></details>
       </div>
     </aside>
 
     <section class="stage" aria-label="Map">
       <div id="map"></div>
+      <details class="layers" id="layerBox">
+        <summary><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 2 8l10 5 10-5-10-5Z"/><path d="m2 13 10 5 10-5"/></svg> Layers</summary>
+        <div class="layers__body">
+          <div class="checks" id="layers">
+            <label><input type="checkbox" data-layer="radar" checked /> Radar</label>
+            <label><input type="checkbox" data-layer="reports" checked /> Storm reports</label>
+            <label><input type="checkbox" data-layer="hail" /> Hail size (24 h)</label>
+            <label><input type="checkbox" data-layer="rotation" /> Rotation (24 h)</label>
+            <label><input type="checkbox" data-layer="rain" /> Rain (24 h)</label>
+            <label><input type="checkbox" data-layer="warnings" checked /> NWS warnings</label>
+            <label><input type="checkbox" data-layer="lightning" checked /> Lightning</label>
+            <label><input type="checkbox" data-layer="stations" checked /> Stations</label>
+          </div>
+        </div>
+      </details>
       <div class="status" id="status" hidden></div>
       <div class="scrub" id="scrub" hidden>
         <div class="steps" aria-label="Step back"><button data-step="-60">−60</button><button data-step="-15">−15</button><button data-step="-5">−5</button></div>
@@ -186,6 +204,6 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="/js/mrms.js?v=2"></script>
   <script src="glm.js?v=1"></script>
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

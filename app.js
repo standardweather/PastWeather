@@ -2155,6 +2155,9 @@
     },
   };
 
+  // A folded-away end date doesn't count.
+  $("throughBox").addEventListener("toggle", () => { if (!$("throughBox").open) $("through").value = ""; });
+
   // Open a shared link: ?loc=Moore, OK&date=2024-05-01&time=2215
   const p = new URLSearchParams(location.search);
   drawLegend();
@@ -2163,6 +2166,7 @@
     $("date").value = p.get("date");
     $("time").value = p.get("time").replace(/^(\d{2})(\d{2})$/, "$1:$2");
     $("through").value = p.get("through") || "";
+    if ($("through").value) $("throughBox").open = true;
     $("query").requestSubmit();
   } else if (p.get("loc")) {
     $("location").value = p.get("loc");
