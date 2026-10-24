@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the severe weather history index for PastWeather's History view.
+"""Build the severe weather history index for ForensicWeather's History view (formerly PastWeather).
 
 Answers "how often has damaging hail, wind or a tornado hit near this address?" without the browser reading
 75 years of NCEI files. Every hail (1 inch or larger), thunderstorm wind (58 mph or stronger) and tornado report
