@@ -1,29 +1,11 @@
-# PastWeather
+# PastWeather data
 
-Client-side web app: look up **archived NOAA MRMS radar** and **NOAA storm reports** for a place and time. Every data source is a US government source, except the NWS warning archive, which is kept by the Iowa Environmental Mesonet at Iowa State University.
+PastWeather is now part of **[ForensicWeather](https://standardweather.github.io/ForensicWeather/)**, whose page and code (`ForensicWeather/index.html`, `app.js`, `glm.js`) live in the `standardweather/standardweather.github.io` repo.
 
-**Live:** https://standardweather.github.io/PastWeather/
+This repo still does two jobs:
 
-## Features
-
-- Place + UTC date/time → nearest MRMS radar frame + nearby SPC and NCEI Storm Events reports
-- Radar archive starts **October 14, 2020** (start of NOAA's MRMS archive on AWS)
-- Leaflet map (Esri basemap + MRMS decoded in the browser by `mrms.js`)
-- Time step ±5 / 15 / 30 / 60 minutes
-- **Storm replay**: a radar loop around the event time (±30 min, −1 h to +30 min, or −2 h to +1 h) cropped to the map view, with storm reports appearing as they were made, lightning flashes and the warning polygons in effect. **Save video** records the loop (MP4 or WebM, depending on the browser) with a title, local time and credits, for reports and exhibits
-- **Written account**: the findings drafted as paragraphs in local time (radar at the event, the replay's timing of heavy echoes, hail and rotation, warnings in effect with their tags, nearest reports, lightning, measured wind, rain and climate context), with a copy button and a section in the printed summary
-- Optional **through date** (up to 31 days): peak wind, station rain and MRMS radar-and-gauge rain totals over the period
-- **History** (leave the date blank): every day since 1950 with hail ≥ 1", wind ≥ 58 mph or a tornado reported within 1–25 mi, with an optional check of MRMS estimated hail at the spot for days since October 2020
-- **Warnings**: the NWS warnings, watches and advisories that covered the place during the day, and which were in effect at the event time. Storm-based warnings count only when their polygon covered the place, and the polygons are drawn on the map
-- **Lightning**: GOES lightning flashes within 25 mi, ±15 minutes to ±1 hour around the event time (2018 onward), with the closest distance and direction. `glm.js` reads only the flash arrays from each GLM file with HTTP range requests
-- **Climate context**: the day's high, low, precipitation and snowfall at the nearest climate station with 30+ years of records, against 1991–2020 normals, with its rank for that date (or period) when it's in the top 10
-- **Date of loss**: every SPC day within ±7 to ±90 days of a claimed date, ranked by MRMS estimated hail at the address, hail, wind and tornado reports within 10 mi, and the nearest airport's daily peak gust (NCEI daily summaries), with a chart, CSV and print section
-- **Ice & snow**: the 48 hours before the event at the nearest hourly station (hours at or below freezing, thaw and refreeze, freezing rain, sleet and snow from present-weather codes, liquid that fell below freezing), winter alerts in effect, and daily snowfall and snow depth from nearby observers (NOAA ACIS)
-- **Print summary** (one page per event, with the map) and **CSV downloads** of reports, observations and history
-- **Request a certified report** fills in the contact form on the home page with the event
-- Soft handoff to [Standard Weather](https://standardweather.github.io/)
-
-No backend, no API keys. NCEI Storm Events are pre-split into per-day files under `data/storm-events/` by `tools/storm_events.py`, and the History view's 1° tiles under `data/history/` are built by `tools/hail_history.py`. A weekly GitHub Actions job (`.github/workflows/storm-events.yml`) reruns both and commits.
+- **Data.** It builds and serves the files ForensicWeather and the property weather profile read from `/PastWeather/data/`: NCEI Storm Events split into per-day files under `data/storm-events/` (`tools/storm_events.py`), and the History view's 1° tiles of hail, wind and tornado reports since 1950 under `data/history/` (`tools/hail_history.py`). A weekly GitHub Actions job (`.github/workflows/storm-events.yml`) reruns both and commits. Keep the `data/` paths stable.
+- **Redirect.** `index.html` sends `/PastWeather/` to `/ForensicWeather/`, keeping the query string and hash, so shared links like `/PastWeather/?loc=Moore, OK&date=2024-05-01&time=2215` still open the same view.
 
 ## Local preview
 
@@ -33,13 +15,13 @@ npx --yes serve .
 # or: python3 -m http.server 8080
 ```
 
-Open the printed URL. Relative asset paths work on GitHub Pages project site (`/PastWeather/`).
+The data files are served at `/PastWeather/data/…` on GitHub Pages.
 
 ## GitHub Pages
 
 Settings → Pages → Source: **Deploy from a branch** → `main` / `/ (root)`.
 
-## Data sources
+## Data sources (ForensicWeather's lookup)
 
 | Data | Source |
 |------|--------|

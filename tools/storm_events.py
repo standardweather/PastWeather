@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Split NOAA NCEI Storm Events yearly CSVs into small per-day JSON files for PastWeather.
+"""Split NOAA NCEI Storm Events yearly CSVs into small per-day JSON files for ForensicWeather (formerly PastWeather).
 
 NCEI publishes one gzipped CSV per year (10+ MB), which is too large for a browser or phone to fetch for a single
 lookup. This script downloads the yearly "details" files, keeps events that have a point location, converts their
