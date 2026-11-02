@@ -6,7 +6,7 @@
     "2023": "StormEvents_details-ftp_v1.0_d2023_c20260323.csv.gz",
     "2024": "StormEvents_details-ftp_v1.0_d2024_c20260728.csv.gz",
     "2025": "StormEvents_details-ftp_v1.0_d2025_c20260819.csv.gz",
-    "2026": "StormEvents_details-ftp_v1.0_d2026_c20260918.csv.gz"
+    "2026": "StormEvents_details-ftp_v1.0_d2026_c20261026.csv.gz"
   },
   "lastMonth": {
     "2020": "202012",
@@ -15,9 +15,9 @@
     "2023": "202312",
     "2024": "202412",
     "2025": "202512",
-    "2026": "202606"
+    "2026": "202607"
   },
   "source": "NOAA NCEI Storm Events Database, https://www.ncei.noaa.gov/pub/data/swdi/stormevents/csvfiles/",
   "firstDay": "2020-10-14",
-  "lastDay": "2026-06-30"
+  "lastDay": "2026-07-31"
 }
